@@ -1,47 +1,98 @@
 import streamlit as st
 import pandas as pd
-from order import SalesOrder # Assumes order.py is still in place
-import os # To check for file existence
+import json
+from order import SalesOrder 
+import os 
+import numpy as np 
 
-# --- Initial Setup (Use Session State for Dynamic Lists) ---
-# Initialize the list of financiers if it doesn't exist in the session state
-if 'financiers' not in st.session_state:
-    st.session_state['financiers'] = ['Bank A', 'Bank B', 'NBFC C', 'In-House Finance']
+# --- Data Constants and Definitions ---
+HYPOTHECATION_FEE_DEFAULT = 2000 
+HYPOTHECATION_FEE_BANK_QUOTATION = 500 
 
-# Fixed list of sales staff for now (could also be dynamic)
-SALES_STAFF_LIST = ['Alice', 'Bob', 'Charlie', 'Diana']
-
-
-# --- Core Data Loading Function ---
-def load_vehicle_data(file_path="price_list.csv"):
+# --- Core List Loading Function ---
+def load_list_from_csv(file_path, column_name):
     """
-    Loads vehicle data from a CSV file, calculates the tax component,
-    and renames columns to match the application's SalesOrder requirements.
+    Loads a single list from a CSV file. Special case: loads incentive rules 
+    and company names from 'finance_companies.csv'.
     """
     try:
         df = pd.read_csv(file_path)
         
-        required_cols = ['MODEL', 'VARIANT', 'EX SHOWROOM', 'FINAL PRICE']
+        # Standard List Loading
+        if column_name in df.columns:
+            name_list = df[column_name].dropna().astype(str).tolist()
+        else:
+            st.error(f"Error: Column '{column_name}' not found in {file_path}. Check CSV header.")
+            name_list = []
+
+        # Incentive Loading (Special Logic for Financiers)
+        incentive_rules = {}
+        if file_path == "finance_companies.csv" and 'incentive_type' in df.columns and 'incentive_value' in df.columns:
+            incentive_df = df.dropna(subset=['incentive_type', 'incentive_value'])
+            
+            for index, row in incentive_df.iterrows():
+                incentive_rules[row['finance_company']] = { 
+                    'type': row['incentive_type'],
+                    'value': float(row['incentive_value']) 
+                }
+            return name_list, incentive_rules
+        
+        return name_list
+
+    except FileNotFoundError:
+        st.warning(f"Configuration file {file_path} not found. Using empty list.")
+        return ([], {}) if file_path == "finance_companies.csv" else []
+    except Exception as e:
+        st.error(f"Error loading list from {file_path}: {e}")
+        return ([], {}) if file_path == "finance_companies.csv" else []
+
+# --- Core Color Data Loading Function ---
+def load_color_data(file_path="colors.json"):
+    """Loads a dictionary of {Model: [Colors]} from a JSON file."""
+    try:
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        st.warning(f"Configuration file {file_path} not found. Color options will be unavailable.")
+        return {}
+    except json.JSONDecodeError:
+        st.error(f"Error: Could not decode JSON from {file_path}. Check file format.")
+        return {}
+    except Exception as e:
+        st.error(f"Error loading color data: {e}")
+        return {}
+
+# --- Core Vehicle Data Loading Function ---
+def load_vehicle_data(file_path="price_list.csv"):
+    """
+    Loads vehicle data from a CSV file, calculates the tax component,
+    and renames columns to match the application's SalesOrder requirements,
+    using ORP as the base price component.
+    """
+    try:
+        df = pd.read_csv(file_path)
+        
+        required_cols = ['MODEL', 'VARIANT', 'ORP', 'FINAL PRICE'] 
         if not all(col in df.columns for col in required_cols):
-            st.error(f"Error: Missing required columns in CSV. Check for: {required_cols}")
+            st.error(f"Error: Missing required columns in price_list.csv. Check for: {required_cols}")
             return []
 
-        df['tax'] = df['FINAL PRICE'] - df['EX SHOWROOM']
+        df['tax'] = df['FINAL PRICE'] - df['ORP']
         
         df.rename(columns={
             'MODEL': 'model',
             'VARIANT': 'color',
-            'EX SHOWROOM': 'ex_showroom_price',
+            'ORP': 'orp',
             'FINAL PRICE': 'total_price'
         }, inplace=True)
         
-        final_cols = ['model', 'color', 'ex_showroom_price', 'tax', 'total_price']
+        final_cols = ['model', 'color', 'orp', 'tax', 'total_price']
         df = df[final_cols]
         
-        # Ensure prices are numerical
-        for col in ['ex_showroom_price', 'tax', 'total_price']:
+        for col in ['orp', 'tax', 'total_price']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
+        df.dropna(subset=['orp', 'total_price'], inplace=True)
         return df.to_dict('records')
         
     except FileNotFoundError:
@@ -52,15 +103,31 @@ def load_vehicle_data(file_path="price_list.csv"):
         return []
 
 
+# --- Initial Setup (Load lists and use Session State) ---
+INITIAL_STAFF_LIST = load_list_from_csv("staff_list.csv", "executive_name")
+INITIAL_FINANCIER_LIST, INCENTIVE_RULES = load_list_from_csv("finance_companies.csv", "finance_company")
+INITIAL_EXECUTIVE_LIST = load_list_from_csv("finance_executives.csv", "finance_exectives")
+
+if 'sales_staff' not in st.session_state:
+    st.session_state['sales_staff'] = INITIAL_STAFF_LIST
+
+if 'financiers' not in st.session_state:
+    st.session_state['financiers'] = INITIAL_FINANCIER_LIST
+
+if 'executives' not in st.session_state:
+    st.session_state['executives'] = INITIAL_EXECUTIVE_LIST
+
+
 # --- UI Application ---
 def sales_app_ui():
     st.title("🚗 DC Generator / Vehicle Sales System")
     
     vehicles = load_vehicle_data()
+    color_map = load_color_data()
     if not vehicles:
         return
 
-    # --- 1. Customer Details (No Change) ---
+    # --- 1. Customer Details ---
     st.header("1. Customer Details")
     col_name, col_phone = st.columns(2)
     with col_name:
@@ -68,24 +135,39 @@ def sales_app_ui():
     with col_phone:
         phone = st.text_input("Phone Number:")
     place = st.text_input("Place/City:")
-    
-    # --- NEW: Staff Name Selection ---
-    st.header("2. Staff & Vehicle Selection")
-    col_staff, col_vehicle = st.columns(2)
-    with col_staff:
-        # 3. To be able to select the sales staff name
-        sales_staff = st.selectbox("Sales Staff:", SALES_STAFF_LIST)
 
-    # --- Vehicle Selection ---
-    with col_vehicle:
-        vehicle_options = [f"{v['model']} - {v['color']}" for v in vehicles]
-        selected_option = st.selectbox("Select Vehicle:", vehicle_options)
-        
-    selected_index = vehicle_options.index(selected_option)
-    selected_vehicle = vehicles[selected_index]
+    # --- 2. Staff & Vehicle Selection (Cascading Dropdowns) ---
+    st.header("2. Staff & Vehicle Selection")
+    col_staff, col_model = st.columns(2)
+    with col_staff:
+        sales_staff = st.selectbox("Sales Staff:", st.session_state['sales_staff']) 
+
+    # 2.1 Model Selection
+    all_models = sorted(list(set([v['model'].strip() for v in vehicles])))
+    with col_model:
+        selected_model = st.selectbox("Select Vehicle Model:", all_models)
+
+    # Filter by Model for Variant/Trim
+    available_variants = [v for v in vehicles if v['model'].strip() == selected_model]
+    variant_options = [v['color'] for v in available_variants]
+    selected_variant = st.selectbox("Select Variant/Trim Level:", variant_options)
+
+    # 2.3 Paint Color Selection
+    model_colors = color_map.get(selected_model, ["No Colors Available"])
+    selected_paint_color = st.selectbox("Select Paint Color:", model_colors)
+
+    # Find the Final Selected Vehicle Data (Price/Tax data is based on Model & Variant)
+    selected_vehicle = next(
+        (v for v in available_variants if v['color'] == selected_variant), 
+        None
+    )
+    if selected_vehicle is None:
+        st.error("Could not find price data for the selected combination.")
+        return
     
     listed_price = selected_vehicle['total_price']
-    st.info(f"CSV Listed Total Price: **${listed_price:,.2f}**")
+    st.info(f"Selected: **{selected_model} {selected_variant}** in **{selected_paint_color}**")
+    st.info(f"CSV Listed Total Price: **{listed_price:,.2f}**")
 
     # --- 3. Negotiated Final Cost & Discount ---
     st.header("3. Negotiated Final Cost")
@@ -101,63 +183,142 @@ def sales_app_ui():
     discount_amount = listed_price - final_cost_by_staff
     
     if discount_amount > 0:
-        st.success(f"Discount Given: **${discount_amount:,.2f}**")
+        st.success(f"Discount Given: **{discount_amount:,.2f}**")
     elif discount_amount < 0:
-        st.warning(f"Markup Applied: ${abs(discount_amount):,.2f}")
+        st.warning(f"Markup Applied: {abs(discount_amount):,.2f}")
     else:
         st.markdown("No Discount applied.")
 
 
-    # --- 4. Payment Details (Combined Finance & Down Payment) ---
+    # --- 4. Payment Details (Finance Management) ---
     st.header("4. Payment Details")
     sale_type = st.radio("Sale Type:", ["Cash", "Finance"])
     
     financier_name = "N/A (Cash Sale)"
+    executive_name = "N/A (Cash Sale)" 
     dd_amount = 0.0
     down_payment = 0.0
+    
+    # New variables for finance calculation
+    hp_fee_to_charge = 0.0
+    incentive_earned = 0.0
+    banker_name = "" # Initialize banker name
 
     if sale_type == "Finance":
         
-        # --- NEW: Financier Selection and Management ---
-        st.subheader("Financier Details")
-        col_select, col_new = st.columns([2, 1])
+        # --- Financier Company Selection and Management ---
+        st.subheader("Financier Company Details")
+        
+        # 4.1 Out Finance Flag
+        out_finance_flag = st.checkbox("Check here if this is **Out Finance** (Financing done externally).")
+        
+        col_comp_select, col_comp_new = st.columns([2, 1])
 
-        with col_select:
-            # 2. To be able to select the financier from the list of drop down
+        with col_comp_select:
             financier_name = st.selectbox(
-                "Select Existing Financier:", 
+                "Select Existing Financier Company:", 
                 st.session_state['financiers']
             )
 
-        with col_new:
-            # 4. & 5. If not in the list, enter the new financier name
-            new_financier = st.text_input("Or Add New Financier:")
-            if st.button("Add Financier"):
+        with col_comp_new:
+            new_financier = st.text_input("Or Add New Company:")
+            if st.button("Add Company"):
                 if new_financier and new_financier not in st.session_state['financiers']:
                     st.session_state['financiers'].append(new_financier)
                     st.success(f"'{new_financier}' added! Please select it from the dropdown.")
-                    # Rerun the app to update the dropdown list
                     st.rerun() 
                 elif new_financier:
                     st.info("Financier already in the list.")
 
+        # 4.2 Conditional Banker Name Input
+        if financier_name == 'Bank':
+            st.markdown("---")
+            st.subheader("Bank Quotation Details")
+            banker_name = st.text_input("Enter Banker's Name (for tracking quote):", key="banker_name_input")
+            st.markdown("---")
 
-        # --- Down Payment Input ---
-        col_dp, col_dd = st.columns(2)
-        with col_dp:
-            # 1. To be able to enter the down payment amount
-            down_payment = st.number_input("Down Payment Amount:", min_value=0.0, step=1000.0)
+
+        # --- Finance Executive Selection and Management ---
+        st.subheader("Finance Executive Details")
+        col_exec_select, col_exec_new = st.columns([2, 1])
+
+        with col_exec_select:
+            executive_name = st.selectbox(
+                "Select Executive Name:",
+                st.session_state['executives']
+            )
+
+        with col_exec_new:
+            new_executive = st.text_input("Or Add New Executive:")
+            if st.button("Add Executive"):
+                if new_executive and new_executive not in st.session_state['executives']:
+                    st.session_state['executives'].append(new_executive)
+                    st.success(f"'{new_executive}' added! Please select it from the dropdown.")
+                    st.rerun()
+                elif new_executive:
+                    st.info("Executive already in the list.")
+
+
+        # --- Down Payment and DD Input ---
+        st.subheader("Payment Amounts")
+        col_dd, col_dp_calc = st.columns(2)
+
         with col_dd:
-            dd_amount = st.number_input("DD / Booking Amount:", min_value=0.0, step=1000.0)
+            dd_amount = st.number_input("DD / Booking Amount:", min_value=0.0, step=100.0, format="%.2f", key="dd_input")
         
+        
+        # --- CRITICAL: Determine HP Fee and Incentive ---
+        if out_finance_flag:
+            # SCENARIO 2: Out Finance
+            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT # $2000 HP Fee
+            incentive_earned = 0.0 # No incentive collected
+
+        elif financier_name == 'Bank':
+            # SCENARIO 1: Bank Quotation (Low HP)
+            hp_fee_to_charge = HYPOTHECATION_FEE_BANK_QUOTATION # $500 HP Fee
+            incentive_earned = 0.0 # No incentive collected
+
+        else:
+            # SCENARIO 3: Other Financiers (Full HP + Incentive)
+            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT # $2000 HP Fee
+            
+            if financier_name in INCENTIVE_RULES:
+                rule = INCENTIVE_RULES[financier_name]
+                if rule['type'] == 'percentage_dd':
+                    incentive_earned = dd_amount * rule['value']
+                elif rule['type'] == 'fixed_file':
+                    incentive_earned = rule['value']
+        
+        
+        # 1. CALCULATE TOTAL CUSTOMER OBLIGATION
+        total_customer_obligation = final_cost_by_staff + hp_fee_to_charge + incentive_earned
+        
+        # 2. CALCULATE REQUIRED DOWN PAYMENT
+        remaining_upfront_needed = total_customer_obligation - dd_amount
+        
+        with col_dp_calc:
+            if remaining_upfront_needed < 0:
+                calculated_dp = 0.0
+                st.info(f"Required Down Payment: 0.00")
+                st.warning(f"DD amount covers all costs! Excess collected: {abs(remaining_upfront_needed):,.2f}")
+            else:
+                calculated_dp = remaining_upfront_needed
+                st.info(f"Required Down Payment: **{calculated_dp:,.2f}**")
+        
+        # --- Final Assignment ---
+        down_payment = calculated_dp
         total_paid = dd_amount + down_payment
-        
-        # Validation check against the FINAL negotiated cost
-        if total_paid > final_cost_by_staff:
-             st.error(f"Total payments exceed the Final Negotiated Cost (${final_cost_by_staff:,.2f}).")
-             return # Stop generation if invalid
-        
-        st.markdown(f"**Amount to be Financed:** **${final_cost_by_staff - total_paid:,.2f}**")
+
+        # 3. CALCULATE FINAL FINANCED AMOUNT
+        financed_amount = total_customer_obligation - total_paid
+        if financed_amount < 0:
+            financed_amount = 0.0
+
+        # Display fees and final financed amount
+        st.markdown(f"**Hypothecation Fee Charged:** **{hp_fee_to_charge:,.2f}**")
+        st.markdown(f"**Financier Incentive Collected:** **{incentive_earned:,.2f}**")
+        st.markdown(f"**Total Customer Obligation:** **{total_customer_obligation:,.2f}**")
+        st.markdown(f"**Final Amount to be Financed:** **{financed_amount:,.2f}**")
         
     
     # --- 5. Generate PDF Button ---
@@ -166,26 +327,41 @@ def sales_app_ui():
         if not name or not phone:
             st.error("Please enter Customer Name and Phone Number.")
             return
+        
+        if financier_name == 'Bank' and not banker_name.strip():
+            st.error("Please enter the Banker's Name for the 'Bank' quotation.")
+            return
 
-        # Instantiate the order
-        # NOTE: You will need to update your SalesOrder class in order.py to accept 
-        # sales_staff and financier_name if you want them in the PDF.
-        order = SalesOrder(name, place, phone, selected_vehicle, final_cost_by_staff,sales_staff,financier_name)
+
+        order = SalesOrder(
+            name, place, phone, selected_vehicle, final_cost_by_staff, 
+            sales_staff, financier_name, executive_name, selected_paint_color,
+            hp_fee_to_charge,     
+            incentive_earned,
+            banker_name
+        )
         
         if sale_type == "Finance":
             order.set_finance_details(dd_amount, down_payment)
         
-        # ... (PDF generation and download logic remains the same)
-        # For simplicity, we skip full PDF logic here but assume it's correctly linked
-        # and would now require updating to include staff/financier names.
-        st.success(f"DC Generated for {name} with Financier: {financier_name} (Staff: {sales_staff})")
+        pdf_filename = f"DC_{name.replace(' ', '_')}_{order.vehicle['model'].replace(' ', '_')}.pdf"
         
-        # --- Placeholder for PDF download (Keep your existing PDF code here) ---
-        # pdf_filename = f"DC_{name.replace(' ', '_')}_{order.vehicle['model'].replace(' ', '_')}.pdf"
-        # order.generate_pdf_challan(pdf_filename)
-        # with open(pdf_filename, "rb") as file:
-        #     st.download_button(...)
-        # -----------------------------------------------------------------------
+        try:
+            order.generate_pdf_challan(pdf_filename)
+            
+            with open(pdf_filename, "rb") as file:
+                st.download_button(
+                    label="Download Official DC Form",
+                    data=file,
+                    file_name=pdf_filename,
+                    mime="application/pdf"
+                )
+            
+            st.success(f"Delivery Challan generated for {name}! Click the button to download.")
+            st.balloons()
+            
+        except Exception as e:
+            st.error(f"An error occurred during PDF generation. Error: {e}")
 
 
 if __name__ == "__main__":

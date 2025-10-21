@@ -3,119 +3,214 @@
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
+from reportlab.lib.colors import red, black, green
+import pandas as pd
 
 class SalesOrder:
-    # (The existing __init__ and set_finance_details methods remain here)
-
-    def __init__(self, customer_name, place, phone, vehicle_details, final_cost_by_staff, sales_staff, financier_name):
-        # ... (Existing code) ...
+    def __init__(self, customer_name, place, phone, vehicle_details, final_cost_by_staff, 
+                 sales_staff, financier_name, executive_name, vehicle_color_name, 
+                 hp_fee_to_charge, incentive_earned, banker_name=""): # Final constructor
         
-        # New fields:
-        self.sales_staff = sales_staff
-        self.financier_name = financier_name    
+        # Customer and Staff Details
         self.customer_name = customer_name
         self.place = place
         self.phone = phone
+        self.sales_staff = sales_staff
+        self.banker_name = banker_name
         
-        # Vehicle Details
+        # Vehicle Pricing Details 
         self.vehicle = vehicle_details
-        self.sale_price = vehicle_details["ex_showroom_price"] + vehicle_details["tax"]
+        self.listed_price = vehicle_details["total_price"]
+        self.orp_price = vehicle_details["orp"] 
+        self.tax_component = vehicle_details["tax"] 
+
+        # Negotiated Details
+        self.final_cost = final_cost_by_staff
+        self.discount = self.listed_price - final_cost_by_staff
+        self.vehicle_color_name = vehicle_color_name
         
-        # Finance Details (Initialized to None)
+        # Finance Details
         self.sale_type = "Cash"
-        self.dd_amount = None
-        self.down_payment = None
-        self.remaining_finance_amount = 0
+        self.financier_name = financier_name
+        self.executive_name = executive_name
+        self.incentive_earned = incentive_earned 
+        self.hp_fee = hp_fee_to_charge          
+        self.dd_amount = 0.0
+        self.down_payment = 0.0
+        self.remaining_finance_amount = 0.0
 
     def set_finance_details(self, dd_amount, down_payment):
         """Sets the details for a financed vehicle."""
         self.sale_type = "Finance"
         self.dd_amount = dd_amount
         self.down_payment = down_payment
-        # Ensure remaining_finance_amount is calculated
-        self.remaining_finance_amount = self.sale_price - dd_amount - down_payment
-    
-    # --- NEW PDF GENERATION METHOD ---
+        
+        # Total cost includes Vehicle Cost + HP Fee + Incentive (if collected)
+        total_customer_cost = self.final_cost + self.hp_fee + self.incentive_earned
+        
+        self.remaining_finance_amount = total_customer_cost - dd_amount - down_payment
+
     def generate_pdf_challan(self, filename="Delivery_Challan.pdf"):
         """Generates the Delivery Challan as a PDF file."""
         c = canvas.Canvas(filename, pagesize=letter)
-        width, height = letter # Standard 8.5 x 11 inches
+        width, height = letter
         
         x_margin = inch
+        x_center = width / 2.0
         y_cursor = height - inch
+        row_height = 0.2 * inch
 
         # --- Title and Header ---
         c.setFont("Helvetica-Bold", 18)
-        c.drawString(x_margin, y_cursor, "DELIVERY CHALLAN / ORDER FORM")
-        y_cursor -= 0.5 * inch
-        
+        c.drawCentredString(x_center, y_cursor, "DELIVERY CHALLAN / ORDER FORM")
+        y_cursor -= 0.3 * inch
         c.line(x_margin, y_cursor, width - x_margin, y_cursor)
-        y_cursor -= 0.25 * inch
+        y_cursor -= 0.3 * inch
 
-        # --- Customer Details ---
+        # --- 1. General Details Block ---
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(x_margin, y_cursor, "CUSTOMER DETAILS")
-        y_cursor -= 0.25 * inch
+        c.drawString(x_margin, y_cursor, "1. GENERAL DETAILS")
+        y_cursor -= 0.2 * inch
         
         c.setFont("Helvetica", 10)
-        c.drawString(x_margin, y_cursor, f"Name: {self.customer_name}")
+        c.drawString(x_margin, y_cursor, f"Order Date: {pd.Timestamp('today').strftime('%Y-%m-%d')}")
+        c.drawString(x_margin + 3.5*inch, y_cursor, f"Sales Staff: {self.sales_staff}")
+        y_cursor -= row_height
+        c.drawString(x_margin, y_cursor, f"Customer Name: {self.customer_name}")
         c.drawString(x_margin + 3.5*inch, y_cursor, f"Phone: {self.phone}")
-        y_cursor -= 0.2 * inch
-        c.drawString(x_margin, y_cursor, f"Place: {self.place}")
+        y_cursor -= row_height
+        c.drawString(x_margin, y_cursor, f"Place/City: {self.place}")
         y_cursor -= 0.5 * inch
 
-        # --- Vehicle Details (Using a simple table structure) ---
+        # --- 2. Vehicle Details Block ---
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(x_margin, y_cursor, "VEHICLE AND PRICING DETAILS")
-        y_cursor -= 0.25 * inch
+        c.drawString(x_margin, y_cursor, "2. VEHICLE & SPECIFICATION DETAILS")
+        y_cursor -= 0.2 * inch
 
         c.setFont("Helvetica", 10)
+        c.drawString(x_margin, y_cursor, "Model:")
+        c.drawString(x_margin + 1.5 * inch, y_cursor, self.vehicle.get('model', 'N/A'))
+        y_cursor -= row_height
         
-        # Define columns: Label, Value
-        data = [
-            ("Model:", self.vehicle.get('model', 'N/A')),
-            ("Color:", self.vehicle.get('color', 'N/A')),
-            ("Ex-Showroom Price:", f"${self.vehicle.get('ex_showroom_price', 0):,.2f}"),
-            ("Taxes/RTO:", f"${self.vehicle.get('tax', 0):,.2f}"),
-        ]
+        c.drawString(x_margin, y_cursor, "Variant/Trim:")
+        c.drawString(x_margin + 1.5 * inch, y_cursor, self.vehicle.get('color', 'N/A'))
+        y_cursor -= row_height
         
-        # Draw the table details
-        row_height = 0.2 * inch
-        for label, value in data:
-            c.drawString(x_margin, y_cursor, label)
-            c.drawString(x_margin + 1.5 * inch, y_cursor, value)
-            y_cursor -= row_height
+        c.drawString(x_margin, y_cursor, "Paint Color:")
+        c.drawString(x_margin + 1.5 * inch, y_cursor, self.vehicle_color_name)
+        y_cursor -= 0.5 * inch
 
-        # --- Total Price ---
+        # --- 3. Pricing Breakdown ---
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(x_margin, y_cursor, "3. PRICING BREAKDOWN")
+        y_cursor -= 0.2 * inch
+        
+        c.setFont("Helvetica", 10)
+        c.drawString(x_margin, y_cursor, "On-Road Price (ORP) Component:")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.orp_price:,.2f}")
+        y_cursor -= row_height
+        
+        c.drawString(x_margin, y_cursor, "Additional Fees/Taxes Component:")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.tax_component:,.2f}")
+        y_cursor -= row_height
+        
+        c.line(x_margin + 2.5 * inch, y_cursor + 0.05 * inch, x_margin + 4 * inch, y_cursor + 0.05 * inch)
+        y_cursor -= 0.1 * inch
+        
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x_margin, y_cursor, "CSV LISTED TOTAL PRICE:")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.listed_price:,.2f}")
+        y_cursor -= 0.3 * inch
+
+        # Discount Line
+        c.setFillColor(red)
+        c.drawString(x_margin, y_cursor, "Discount / Adjustment:")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"- ${self.discount:,.2f}")
+        c.setFillColor(black)
+        y_cursor -= 0.3 * inch
+        
+        # Final Negotiated Cost
+        c.line(x_margin, y_cursor + 0.05 * inch, width - x_margin, y_cursor + 0.05 * inch) 
         y_cursor -= 0.1 * inch
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(x_margin, y_cursor, "TOTAL PRICE:")
-        c.drawString(x_margin + 1.5 * inch, y_cursor, f"${self.sale_price:,.2f}")
+        c.drawString(x_margin, y_cursor, "FINAL VEHICLE COST:")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.final_cost:,.2f}")
         y_cursor -= 0.5 * inch
+
+        # --- 4. ADDITIONAL CHARGES (CONSOLIDATED) ---
+        charge_index = 4
+        total_additional_finance_charges = self.hp_fee + self.incentive_earned
         
-        # --- Payment Details ---
+        if total_additional_finance_charges > 0:
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(x_margin, y_cursor, f"{charge_index}. ADDITIONAL FINANCE PROCESSING CHARGES")
+            y_cursor -= 0.2 * inch
+            
+            c.setFont("Helvetica", 10)
+            c.drawString(x_margin, y_cursor, "Total Finance Processing Charges:")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${total_additional_finance_charges:,.2f}")
+            y_cursor -= 0.3 * inch
+            
+            charge_index += 1
+        
+        # --- 5. PAYMENT & FINANCE BREAKDOWN ---
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(x_margin, y_cursor, "PAYMENT METHOD & BREAKDOWN")
-        y_cursor -= 0.25 * inch
+        c.drawString(x_margin, y_cursor, f"{charge_index}. PAYMENT & FINANCE BREAKDOWN")
+        y_cursor -= 0.2 * inch
         
         c.setFont("Helvetica", 10)
         c.drawString(x_margin, y_cursor, f"Sale Type: {self.sale_type}")
-        y_cursor -= 0.2 * inch
+        y_cursor -= row_height
 
         if self.sale_type == "Finance":
-            c.drawString(x_margin, y_cursor, f"DD Amount: ${self.dd_amount:,.2f}")
-            y_cursor -= 0.2 * inch
-            c.drawString(x_margin, y_cursor, f"Down Payment: ${self.down_payment:,.2f}")
-            y_cursor -= 0.2 * inch
+            c.drawString(x_margin, y_cursor, f"Financier Company: {self.financier_name}")
             
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(x_margin, y_cursor, f"Financed Amount:")
-            c.drawString(x_margin + 1.5 * inch, y_cursor, f"${self.remaining_finance_amount:,.2f}")
-        else:
-            c.drawString(x_margin, y_cursor, f"Full Cash Payment Received: ${self.sale_price:,.2f}")
+            if self.banker_name:
+                c.drawString(x_margin + 3.5*inch, y_cursor, f"Banker (Quote): {self.banker_name}")
+            else:
+                c.drawString(x_margin + 3.5*inch, y_cursor, f"Finance Executive: {self.executive_name}")
+            
+            y_cursor -= row_height
+            
+            c.drawString(x_margin, y_cursor, f"DD / Booking Amount Paid:")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.dd_amount:,.2f}")
+            y_cursor -= row_height
 
+            c.drawString(x_margin, y_cursor, f"Down Payment Amount Paid:")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.down_payment:,.2f}")
+            y_cursor -= 0.3 * inch
+            
+            c.line(x_margin + 2.5 * inch, y_cursor + 0.05 * inch, x_margin + 4 * inch, y_cursor + 0.05 * inch)
+            y_cursor -= 0.1 * inch
+            
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(x_margin, y_cursor, "FINAL AMOUNT TO BE FINANCED:")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.remaining_finance_amount:,.2f}")
+            
+            # --- INTERNAL NOTE: DEALERSHIP EARNINGS ---
+            if self.incentive_earned > 0 and self.financier_name != 'Bank':
+                y_cursor -= 0.5 * inch
+                c.setFont("Helvetica-Bold", 10)
+                c.setFillColor(green)
+                c.drawString(x_margin, y_cursor, f"*** DEALERSHIP EARNINGS (Internal Note): ***")
+                y_cursor -= row_height
+                c.drawString(x_margin, y_cursor, f"Finance Incentive Earned:")
+                c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.incentive_earned:,.2f}")
+                c.setFillColor(black)
+                y_cursor -= 0.3 * inch
+            
+        else: # Cash Sale
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(x_margin, y_cursor, f"Total Cash Payment Received:")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.final_cost:,.2f}")
 
-        # --- Save the PDF ---
-        c.showPage()
+        # --- Footer Signatures ---
+        y_cursor = 2 * inch 
+        c.line(x_margin, y_cursor, x_margin + 2 * inch, y_cursor)
+        c.drawCentredString(x_margin + inch, y_cursor - 0.2 * inch, "Customer Signature")
+
+        c.line(width - x_margin - 2 * inch, y_cursor, width - x_margin, y_cursor)
+        c.drawCentredString(width - x_margin - inch, y_cursor - 0.2 * inch, "Staff Signature")
+
         c.save()
         return filename
