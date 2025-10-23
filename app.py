@@ -111,6 +111,7 @@ def initialize_all_data():
     vehicle_df = all_dfs.get("price_list")
     vehicles = []
     if vehicle_df is not None and 'ORP' in vehicle_df.columns and 'FINAL PRICE' in vehicle_df.columns:
+        # Columns were cleaned in the cache function, now convert to numeric
         vehicle_df['tax'] = pd.to_numeric(vehicle_df['FINAL PRICE'], errors='coerce') - pd.to_numeric(vehicle_df['ORP'], errors='coerce')
         vehicle_df.rename(columns={
             'MODEL': 'model', 'VARIANT': 'color', 'ORP': 'orp', 'FINAL PRICE': 'total_price'
@@ -118,7 +119,9 @@ def initialize_all_data():
         for col in ['orp', 'tax', 'total_price']:
             vehicle_df[col] = pd.to_numeric(vehicle_df[col], errors='coerce')
         vehicles = vehicle_df.dropna(subset=['orp', 'total_price']).to_dict('records')
-    
+    else:
+        vehicles = []
+        
     # --- 3. Process Color Data ---
     color_df = all_dfs.get("colors")
     color_map = {}
@@ -130,13 +133,56 @@ def initialize_all_data():
     
     return vehicles, color_map
 
+# --- DC Number Generation ---
+def get_next_dc_number():
+    """Generates the next sequential DC number by reading the last one saved."""
+    try:
+        # Use a non-cached load for this specific function to ensure current value
+        global GSPREAD_CLIENT
+        if GSPREAD_CLIENT is None:
+            GSPREAD_CLIENT = gspread.service_account_from_dict(st.secrets["google_service_account"])
+            
+        spreadsheet_title = st.secrets.get("spreadsheet_title", SPREADSHEET_TITLE)
+        sh = GSPREAD_CLIENT.open(spreadsheet_title['spreadsheet_title'])
+        
+        worksheet = sh.worksheet("sales_records")
+        
+        # Get all values from the 'DC_Number' column (assuming it's the 2nd column)
+        dc_column = worksheet.col_values(2) 
+        current_numbers = []
+        
+        if len(dc_column) > 1:
+            dc_numbers = dc_column[1:] 
+            for dc_str in dc_numbers:
+                if dc_str: # Check that the string is not empty
+                    try:
+                        # CRITICAL FIX: Since the stored value is expected to be a 5-digit number, 
+                        # we try to convert the whole string to an integer.
+                        current_numbers.append(int(dc_str.strip()))
+                    except ValueError:
+                        # Ignore badly formatted entries
+                        pass
+
+            if current_numbers:
+                next_number = max(current_numbers) + 1
+            else:
+                next_number = 1
+        else:
+            next_number = 1
+        
+        return f"{next_number:05d}"
+        
+    except Exception as e:
+        st.error(f"Could not generate sequential DC number. Using default. Error: {e}")
+        return f"DC-ERROR-{pd.Timestamp('now').strftime('%H%M')}"
+
 
 # --- UI Application ---
 def sales_app_ui():
     
     vehicles, color_map = initialize_all_data() 
 
-    st.title("🚗 DC Generator / Vehicle Sales System")
+    st.title("Vehicle Sales System")
     
     if not vehicles:
         st.error("Application setup failed. Data could not be loaded from Google Sheets.")
@@ -171,7 +217,7 @@ def sales_app_ui():
     model_colors = color_map.get(selected_model, ["No Colors Available"])
     selected_paint_color = st.selectbox("Select Paint Color:", model_colors)
 
-    # Find the Final Selected Vehicle Data 
+    # Find the Final Selected Vehicle Data (Price/Tax data is based on Model & Variant)
     selected_vehicle = next(
         (v for v in available_variants if v['color'] == selected_variant), 
         None
@@ -194,11 +240,6 @@ def sales_app_ui():
         step=100.0,
         format="%.2f"
     )
-    st.subheader("PR")
-    pr_enabled_flag = st.checkbox("Check here to confirm PR applicable for this sale.")
-    
-    if pr_enabled_flag:
-        st.info("PR will be done by the dealership")
     
     discount_amount = listed_price - final_cost_by_staff
     
@@ -350,12 +391,16 @@ def sales_app_ui():
             st.error("Please enter the Banker's Name for the 'Bank' quotation.")
             return
 
+        # Generate DC Number
+        dc_number = get_next_dc_number()
+
         order = SalesOrder(
             name, place, phone, selected_vehicle, final_cost_by_staff, 
             sales_staff, financier_name, executive_name, selected_paint_color,
             hp_fee_to_charge,     
             incentive_earned,
-            banker_name
+            banker_name,
+            dc_number
         )
         
         if sale_type == "Finance":
@@ -370,7 +415,6 @@ def sales_app_ui():
             sh = gc.open(spreadsheet_title['spreadsheet_title'])
             worksheet = sh.worksheet("sales_records")
             worksheet.append_row(list(record_data.values()))
-            # Do NOT rerun or show success here to avoid premature script exit
         except Exception as e:
             st.error(f"Error saving data to Google Sheets. Error: {e}")
             
