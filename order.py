@@ -232,6 +232,10 @@ class SalesOrder:
         c.drawString(x_margin, y_cursor, "TRANSACTION SUMMARY (CUSTOMER COPY)")
         y_cursor -= 0.2 * inch
 
+        c.setFont("Helvetica", 10)
+        c.drawString(x_margin, y_cursor, f"Customer Name: {self.customer_name}")
+        y_cursor -= 0.2 * inch
+        
         # Left Column (Vehicle Summary)
         summary_y_start = y_cursor
         c.setFont("Helvetica", 10)
