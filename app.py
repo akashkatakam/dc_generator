@@ -1,130 +1,145 @@
 import streamlit as st
 import pandas as pd
 import json
-from order import SalesOrder 
 import os 
-import numpy as np 
+import gspread 
+import numpy as np
+
+from order import SalesOrder
 
 # --- Data Constants and Definitions ---
 HYPOTHECATION_FEE_DEFAULT = 2000 
 HYPOTHECATION_FEE_BANK_QUOTATION = 500 
 
-# --- Core List Loading Function ---
-def load_list_from_csv(file_path, column_name):
-    """
-    Loads a single list from a CSV file. Special case: loads incentive rules 
-    and company names from 'finance_companies.csv'.
-    """
-    try:
-        df = pd.read_csv(file_path)
-        
-        # Standard List Loading
-        if column_name in df.columns:
-            name_list = df[column_name].dropna().astype(str).tolist()
-        else:
-            st.error(f"Error: Column '{column_name}' not found in {file_path}. Check CSV header.")
-            name_list = []
+# Global variable to hold the opened spreadsheet client instance
+GSPREAD_CLIENT = None
+INCENTIVE_RULES = {}
+SPREADSHEET_TITLE = "Sales Records DB" # Default title, used if not in secrets
 
-        # Incentive Loading (Special Logic for Financiers)
-        incentive_rules = {}
-        if file_path == "finance_companies.csv" and 'incentive_type' in df.columns and 'incentive_value' in df.columns:
-            incentive_df = df.dropna(subset=['incentive_type', 'incentive_value'])
+# --- Core Data Loading Function (CACHED and Optimized) ---
+@st.cache_data(ttl=3600) # Cache data for 1 hour (3600 seconds)
+def load_and_cache_all_data():
+    """
+    Opens the Google Sheet once and fetches data from all required worksheets.
+    Returns a dictionary of DataFrames.
+    """
+    global GSPREAD_CLIENT
+    
+    if GSPREAD_CLIENT is None:
+        try:
+            # Authentication block
+            GSPREAD_CLIENT = gspread.service_account_from_dict(st.secrets["google_service_account"])
+        except Exception as e:
+            st.error(f"Authentication Error: Could not connect to Google Sheets. Check 'secrets.toml'. Error: {e}")
+            return None
+
+    try:
+        spreadsheet_title = st.secrets.get("spreadsheet_title", SPREADSHEET_TITLE)
+        # --- OPTIMIZATION: Open the entire workbook ONCE ---
+        sh = GSPREAD_CLIENT.open(spreadsheet_title['spreadsheet_title']) 
+        
+        # List of worksheets to load
+        worksheet_names = ["sales_staff", "finance_executives", "finance_companies", "price_list", "colors"]
+        data_frames = {}
+
+        for name in worksheet_names:
+            try:
+                worksheet = sh.worksheet(name)
+                # Manually create DataFrame using all values for robustness (first row is header)
+                data = worksheet.get_all_values() 
+                if data:
+                    data_frames[name] = pd.DataFrame(data[1:], columns=data[0])
+                else:
+                    data_frames[name] = pd.DataFrame() 
+            except gspread.WorksheetNotFound:
+                st.error(f"Worksheet '{name}' not found. Please check spelling in Google Sheet.")
+                return None
+        
+        return data_frames
+        
+    except Exception as e:
+        st.error(f"Error accessing Google Sheet '{spreadsheet_title}'. Error: {e}")
+        return None
+
+# --- Core Data Initialization Function (Processes Cached DataFrames) ---
+def initialize_all_data():
+    """Processes the cached DataFrames into the variables used by the UI."""
+    global INCENTIVE_RULES
+
+    all_dfs = load_and_cache_all_data()
+    if all_dfs is None:
+        return [], {}
+
+    # --- 1. Process Lists (Staff, Executives, Financiers) ---
+    staff_df = all_dfs.get("sales_staff")
+    exec_df = all_dfs.get("finance_executives")
+    financier_df = all_dfs.get("finance_companies")
+    
+    # Staff List
+    initial_staff = staff_df['executive_name'].dropna().astype(str).tolist() if staff_df is not None and 'executive_name' in staff_df.columns else []
+    # Executive List
+    initial_executives = exec_df['finance_executives'].dropna().astype(str).tolist() if exec_df is not None and 'finance_executives' in exec_df.columns else []
+    
+    # Financiers and Incentives
+    if financier_df is not None and 'finance_company' in financier_df.columns:
+        initial_financiers = financier_df['finance_company'].dropna().astype(str).tolist()
+        INCENTIVE_RULES = {}
+        for index, row in financier_df.dropna(subset=['incentive_type', 'incentive_value']).iterrows():
             
-            for index, row in incentive_df.iterrows():
-                incentive_rules[row['finance_company']] = { 
+            # CRITICAL CLEANING STEP: Remove commas from incentive_value string
+            raw_value = str(row['incentive_value']).replace(',', '').strip()
+            
+            # Handle potential empty string after cleaning
+            if raw_value:
+                INCENTIVE_RULES[row['finance_company']] = {
                     'type': row['incentive_type'],
-                    'value': float(row['incentive_value']) 
+                    'value': float(raw_value)
                 }
-            return name_list, incentive_rules
+    else:
+        initial_financiers = []
+        INCENTIVE_RULES = {}
         
-        return name_list
-
-    except FileNotFoundError:
-        st.warning(f"Configuration file {file_path} not found. Using empty list.")
-        return ([], {}) if file_path == "finance_companies.csv" else []
-    except Exception as e:
-        st.error(f"Error loading list from {file_path}: {e}")
-        return ([], {}) if file_path == "finance_companies.csv" else []
-
-# --- Core Color Data Loading Function ---
-def load_color_data(file_path="colors.json"):
-    """Loads a dictionary of {Model: [Colors]} from a JSON file."""
-    try:
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        st.warning(f"Configuration file {file_path} not found. Color options will be unavailable.")
-        return {}
-    except json.JSONDecodeError:
-        st.error(f"Error: Could not decode JSON from {file_path}. Check file format.")
-        return {}
-    except Exception as e:
-        st.error(f"Error loading color data: {e}")
-        return {}
-
-# --- Core Vehicle Data Loading Function ---
-def load_vehicle_data(file_path="price_list.csv"):
-    """
-    Loads vehicle data from a CSV file, calculates the tax component,
-    and renames columns to match the application's SalesOrder requirements,
-    using ORP as the base price component.
-    """
-    try:
-        df = pd.read_csv(file_path)
+    # Store in Session State
+    if 'sales_staff' not in st.session_state:
+        st.session_state['sales_staff'] = initial_staff
+    if 'financiers' not in st.session_state:
+        st.session_state['financiers'] = initial_financiers
+    if 'executives' not in st.session_state:
+        st.session_state['executives'] = initial_executives
         
-        required_cols = ['MODEL', 'VARIANT', 'ORP', 'FINAL PRICE'] 
-        if not all(col in df.columns for col in required_cols):
-            st.error(f"Error: Missing required columns in price_list.csv. Check for: {required_cols}")
-            return []
-
-        df['tax'] = df['FINAL PRICE'] - df['ORP']
-        
-        df.rename(columns={
-            'MODEL': 'model',
-            'VARIANT': 'color',
-            'ORP': 'orp',
-            'FINAL PRICE': 'total_price'
+    # --- 2. Process Vehicle Pricing Data ---
+    vehicle_df = all_dfs.get("price_list")
+    vehicles = []
+    if vehicle_df is not None and 'ORP' in vehicle_df.columns and 'FINAL PRICE' in vehicle_df.columns:
+        vehicle_df['tax'] = pd.to_numeric(vehicle_df['FINAL PRICE'], errors='coerce') - pd.to_numeric(vehicle_df['ORP'], errors='coerce')
+        vehicle_df.rename(columns={
+            'MODEL': 'model', 'VARIANT': 'color', 'ORP': 'orp', 'FINAL PRICE': 'total_price'
         }, inplace=True)
-        
-        final_cols = ['model', 'color', 'orp', 'tax', 'total_price']
-        df = df[final_cols]
-        
         for col in ['orp', 'tax', 'total_price']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        df.dropna(subset=['orp', 'total_price'], inplace=True)
-        return df.to_dict('records')
-        
-    except FileNotFoundError:
-        st.error(f"Error: The file '{file_path}' was not found. Please ensure it's in the same directory.")
-        return []
-    except Exception as e:
-        st.error(f"An error occurred while reading the CSV file: {e}")
-        return []
-
-
-# --- Initial Setup (Load lists and use Session State) ---
-INITIAL_STAFF_LIST = load_list_from_csv("staff_list.csv", "executive_name")
-INITIAL_FINANCIER_LIST, INCENTIVE_RULES = load_list_from_csv("finance_companies.csv", "finance_company")
-INITIAL_EXECUTIVE_LIST = load_list_from_csv("finance_executives.csv", "finance_exectives")
-
-if 'sales_staff' not in st.session_state:
-    st.session_state['sales_staff'] = INITIAL_STAFF_LIST
-
-if 'financiers' not in st.session_state:
-    st.session_state['financiers'] = INITIAL_FINANCIER_LIST
-
-if 'executives' not in st.session_state:
-    st.session_state['executives'] = INITIAL_EXECUTIVE_LIST
+            vehicle_df[col] = pd.to_numeric(vehicle_df[col], errors='coerce')
+        vehicles = vehicle_df.dropna(subset=['orp', 'total_price']).to_dict('records')
+    
+    # --- 3. Process Color Data ---
+    color_df = all_dfs.get("colors")
+    color_map = {}
+    if color_df is not None and 'MODEL' in color_df.columns and 'Color_List' in color_df.columns:
+        color_map = {
+            row['MODEL']: [c.strip() for c in str(row['Color_List']).split(',')]
+            for index, row in color_df.iterrows()
+        }
+    
+    return vehicles, color_map
 
 
 # --- UI Application ---
 def sales_app_ui():
+    
+    vehicles, color_map = initialize_all_data() 
+
     st.title("🚗 DC Generator / Vehicle Sales System")
     
-    vehicles = load_vehicle_data()
-    color_map = load_color_data()
     if not vehicles:
+        st.error("Application setup failed. Data could not be loaded from Google Sheets.")
         return
 
     # --- 1. Customer Details ---
@@ -136,7 +151,7 @@ def sales_app_ui():
         phone = st.text_input("Phone Number:")
     place = st.text_input("Place/City:")
 
-    # --- 2. Staff & Vehicle Selection (Cascading Dropdowns) ---
+    # --- 2. Staff & Vehicle Selection ---
     st.header("2. Staff & Vehicle Selection")
     col_staff, col_model = st.columns(2)
     with col_staff:
@@ -156,7 +171,7 @@ def sales_app_ui():
     model_colors = color_map.get(selected_model, ["No Colors Available"])
     selected_paint_color = st.selectbox("Select Paint Color:", model_colors)
 
-    # Find the Final Selected Vehicle Data (Price/Tax data is based on Model & Variant)
+    # Find the Final Selected Vehicle Data 
     selected_vehicle = next(
         (v for v in available_variants if v['color'] == selected_variant), 
         None
@@ -167,7 +182,7 @@ def sales_app_ui():
     
     listed_price = selected_vehicle['total_price']
     st.info(f"Selected: **{selected_model} {selected_variant}** in **{selected_paint_color}**")
-    st.info(f"CSV Listed Total Price: **{listed_price:,.2f}**")
+    st.info(f"Total Price: **{listed_price:,.2f}**")
 
     # --- 3. Negotiated Final Cost & Discount ---
     st.header("3. Negotiated Final Cost")
@@ -179,6 +194,11 @@ def sales_app_ui():
         step=100.0,
         format="%.2f"
     )
+    st.subheader("PR")
+    pr_enabled_flag = st.checkbox("Check here to confirm PR applicable for this sale.")
+    
+    if pr_enabled_flag:
+        st.info("PR will be done by the dealership")
     
     discount_amount = listed_price - final_cost_by_staff
     
@@ -199,17 +219,15 @@ def sales_app_ui():
     dd_amount = 0.0
     down_payment = 0.0
     
-    # New variables for finance calculation
     hp_fee_to_charge = 0.0
     incentive_earned = 0.0
-    banker_name = "" # Initialize banker name
+    banker_name = "" 
 
     if sale_type == "Finance":
         
         # --- Financier Company Selection and Management ---
         st.subheader("Financier Company Details")
         
-        # 4.1 Out Finance Flag
         out_finance_flag = st.checkbox("Check here if this is **Out Finance** (Financing done externally).")
         
         col_comp_select, col_comp_new = st.columns([2, 1])
@@ -230,11 +248,12 @@ def sales_app_ui():
                 elif new_financier:
                     st.info("Financier already in the list.")
 
-        # 4.2 Conditional Banker Name Input
+        # 4.3 Conditional Banker Name Input
         if financier_name == 'Bank':
             st.markdown("---")
             st.subheader("Bank Quotation Details")
             banker_name = st.text_input("Enter Banker's Name (for tracking quote):", key="banker_name_input")
+            financier_name = banker_name
             st.markdown("---")
 
 
@@ -269,18 +288,18 @@ def sales_app_ui():
         
         # --- CRITICAL: Determine HP Fee and Incentive ---
         if out_finance_flag:
-            # SCENARIO 2: Out Finance
-            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT # $2000 HP Fee
-            incentive_earned = 0.0 # No incentive collected
+            # SCENARIO 2: Out Finance ($2000 HP Fee, No incentive)
+            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT
+            incentive_earned = 0.0 
 
         elif financier_name == 'Bank':
-            # SCENARIO 1: Bank Quotation (Low HP)
-            hp_fee_to_charge = HYPOTHECATION_FEE_BANK_QUOTATION # $500 HP Fee
-            incentive_earned = 0.0 # No incentive collected
+            # SCENARIO 1: Bank Quotation ($500 HP Fee, No incentive)
+            hp_fee_to_charge = HYPOTHECATION_FEE_BANK_QUOTATION
+            incentive_earned = 0.0
 
         else:
             # SCENARIO 3: Other Financiers (Full HP + Incentive)
-            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT # $2000 HP Fee
+            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT
             
             if financier_name in INCENTIVE_RULES:
                 rule = INCENTIVE_RULES[financier_name]
@@ -318,7 +337,6 @@ def sales_app_ui():
         st.markdown(f"**Hypothecation Fee Charged:** **{hp_fee_to_charge:,.2f}**")
         st.markdown(f"**Financier Incentive Collected:** **{incentive_earned:,.2f}**")
         st.markdown(f"**Total Customer Obligation:** **{total_customer_obligation:,.2f}**")
-        st.markdown(f"**Final Amount to be Financed:** **{financed_amount:,.2f}**")
         
     
     # --- 5. Generate PDF Button ---
@@ -332,7 +350,6 @@ def sales_app_ui():
             st.error("Please enter the Banker's Name for the 'Bank' quotation.")
             return
 
-
         order = SalesOrder(
             name, place, phone, selected_vehicle, final_cost_by_staff, 
             sales_staff, financier_name, executive_name, selected_paint_color,
@@ -344,6 +361,20 @@ def sales_app_ui():
         if sale_type == "Finance":
             order.set_finance_details(dd_amount, down_payment)
         
+        # --- Save Data to Google Sheets (Sales Records) ---
+        record_data = order.get_data_for_export()
+        try:
+            gc = gspread.service_account_from_dict(st.secrets["google_service_account"])
+            spreadsheet_title = st.secrets.get("spreadsheet_title", SPREADSHEET_TITLE)
+        # --- OPTIMIZATION: Open the entire workbook ONCE ---
+            sh = gc.open(spreadsheet_title['spreadsheet_title'])
+            worksheet = sh.worksheet("sales_records")
+            worksheet.append_row(list(record_data.values()))
+            # Do NOT rerun or show success here to avoid premature script exit
+        except Exception as e:
+            st.error(f"Error saving data to Google Sheets. Error: {e}")
+            
+        # --- PDF Generation and Download ---
         pdf_filename = f"DC_{name.replace(' ', '_')}_{order.vehicle['model'].replace(' ', '_')}.pdf"
         
         try:

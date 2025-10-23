@@ -9,7 +9,7 @@ import pandas as pd
 class SalesOrder:
     def __init__(self, customer_name, place, phone, vehicle_details, final_cost_by_staff, 
                  sales_staff, financier_name, executive_name, vehicle_color_name, 
-                 hp_fee_to_charge, incentive_earned, banker_name=""): # Final constructor
+                 hp_fee_to_charge, incentive_earned, banker_name=""):
         
         # Customer and Staff Details
         self.customer_name = customer_name
@@ -49,6 +49,40 @@ class SalesOrder:
         total_customer_cost = self.final_cost + self.hp_fee + self.incentive_earned
         
         self.remaining_finance_amount = total_customer_cost - dd_amount - down_payment
+
+    def get_data_for_export(self):
+        """Returns a flat dictionary of all transaction data for storage."""
+        data = {
+            # --- Transaction Metadata ---
+            'Timestamp': pd.Timestamp('now').strftime('%Y-%m-%d %H:%M:%S'),
+            'Sales_Staff': self.sales_staff,
+            'Financier_Company': self.financier_name,
+            'Finance_Executive': self.executive_name,
+            'Banker_Name': self.banker_name if self.banker_name else '',
+            'Sale_Type': self.sale_type,
+            
+            # --- Customer Data ---
+            'Customer_Name': self.customer_name,
+            'Phone_Number': self.phone,
+            'Place': self.place,
+            
+            # --- Vehicle Data ---
+            'Model': self.vehicle.get('model'),
+            'Variant': self.vehicle.get('color'),
+            'Paint_Color': self.vehicle_color_name,
+            
+            # --- Financials ---
+            'Price_ORP': self.orp_price,
+            'Price_Listed_Total': self.listed_price,
+            'Price_Negotiated_Final': self.final_cost,
+            'Discount_Given': self.discount,
+            'Charge_HP_Fee': self.hp_fee,
+            'Charge_Incentive': self.incentive_earned,
+            'Payment_DD': self.dd_amount,
+            'Payment_DownPayment': self.down_payment,
+            'Amount_Financed': self.remaining_finance_amount
+        }
+        return data
 
     def generate_pdf_challan(self, filename="Delivery_Challan.pdf"):
         """Generates the Delivery Challan as a PDF file."""
@@ -107,25 +141,25 @@ class SalesOrder:
         
         c.setFont("Helvetica", 10)
         c.drawString(x_margin, y_cursor, "On-Road Price (ORP) Component:")
-        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.orp_price:,.2f}")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.orp_price:,.2f}")
         y_cursor -= row_height
         
         c.drawString(x_margin, y_cursor, "Additional Fees/Taxes Component:")
-        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.tax_component:,.2f}")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.tax_component:,.2f}")
         y_cursor -= row_height
         
         c.line(x_margin + 2.5 * inch, y_cursor + 0.05 * inch, x_margin + 4 * inch, y_cursor + 0.05 * inch)
         y_cursor -= 0.1 * inch
         
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(x_margin, y_cursor, "CSV LISTED TOTAL PRICE:")
-        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.listed_price:,.2f}")
+        c.drawString(x_margin, y_cursor, "TOTAL PRICE:")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.listed_price:,.2f}")
         y_cursor -= 0.3 * inch
 
         # Discount Line
         c.setFillColor(red)
         c.drawString(x_margin, y_cursor, "Discount / Adjustment:")
-        c.drawString(x_margin + 2.5 * inch, y_cursor, f"- ${self.discount:,.2f}")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"- {self.discount:,.2f}")
         c.setFillColor(black)
         y_cursor -= 0.3 * inch
         
@@ -134,7 +168,7 @@ class SalesOrder:
         y_cursor -= 0.1 * inch
         c.setFont("Helvetica-Bold", 12)
         c.drawString(x_margin, y_cursor, "FINAL VEHICLE COST:")
-        c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.final_cost:,.2f}")
+        c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.final_cost:,.2f}")
         y_cursor -= 0.5 * inch
 
         # --- 4. ADDITIONAL CHARGES (CONSOLIDATED) ---
@@ -148,7 +182,7 @@ class SalesOrder:
             
             c.setFont("Helvetica", 10)
             c.drawString(x_margin, y_cursor, "Total Finance Processing Charges:")
-            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${total_additional_finance_charges:,.2f}")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"{total_additional_finance_charges:,.2f}")
             y_cursor -= 0.3 * inch
             
             charge_index += 1
@@ -173,19 +207,13 @@ class SalesOrder:
             y_cursor -= row_height
             
             c.drawString(x_margin, y_cursor, f"DD / Booking Amount Paid:")
-            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.dd_amount:,.2f}")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.dd_amount:,.2f}")
             y_cursor -= row_height
 
-            c.drawString(x_margin, y_cursor, f"Down Payment Amount Paid:")
-            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.down_payment:,.2f}")
+            c.drawString(x_margin, y_cursor, f"Down Payment Amount to be Paid:")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.down_payment:,.2f}")
             y_cursor -= 0.3 * inch
             
-            c.line(x_margin + 2.5 * inch, y_cursor + 0.05 * inch, x_margin + 4 * inch, y_cursor + 0.05 * inch)
-            y_cursor -= 0.1 * inch
-            
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(x_margin, y_cursor, "FINAL AMOUNT TO BE FINANCED:")
-            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.remaining_finance_amount:,.2f}")
             
             # --- INTERNAL NOTE: DEALERSHIP EARNINGS ---
             if self.incentive_earned > 0 and self.financier_name != 'Bank':
@@ -195,14 +223,14 @@ class SalesOrder:
                 c.drawString(x_margin, y_cursor, f"*** DEALERSHIP EARNINGS (Internal Note): ***")
                 y_cursor -= row_height
                 c.drawString(x_margin, y_cursor, f"Finance Incentive Earned:")
-                c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.incentive_earned:,.2f}")
+                c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.incentive_earned:,.2f}")
                 c.setFillColor(black)
                 y_cursor -= 0.3 * inch
             
         else: # Cash Sale
             c.setFont("Helvetica-Bold", 12)
             c.drawString(x_margin, y_cursor, f"Total Cash Payment Received:")
-            c.drawString(x_margin + 2.5 * inch, y_cursor, f"${self.final_cost:,.2f}")
+            c.drawString(x_margin + 2.5 * inch, y_cursor, f"{self.final_cost:,.2f}")
 
         # --- Footer Signatures ---
         y_cursor = 2 * inch 
