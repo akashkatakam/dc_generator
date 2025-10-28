@@ -225,7 +225,7 @@ class SalesOrder:
             y_cursor -= 0.3 * inch
 
         # --- Summary Block (Consolidated Summary at the bottom) ---
-        y_cursor = 4 * inch # Fixed starting point for summary section
+        y_cursor = 5 * inch # Fixed starting point for summary section
         c.line(x_margin, y_cursor, width - x_margin, y_cursor) 
         y_cursor -= 0.2 * inch
         c.setFont("Helvetica-Bold", 12)
@@ -235,7 +235,7 @@ class SalesOrder:
         c.setFont("Helvetica", 10)
         c.drawString(x_margin, y_cursor, f"Customer Name: {self.customer_name}")
         y_cursor -= 0.2 * inch
-        
+
         # Left Column (Vehicle Summary)
         summary_y_start = y_cursor
         c.setFont("Helvetica", 10)

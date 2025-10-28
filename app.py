@@ -1,402 +1,217 @@
 import streamlit as st
-import pandas as pd
-import json
-import os 
-import gspread 
-import numpy as np
+from config import initialize_app_data # Initialize all data
+from finance_helper import calculate_finance_fees, get_next_dc_number, HP_FEE_DEFAULT, HP_FEE_BANK_QUOTATION
+from data_manager import save_record_to_sheet, GSPREAD_CLIENT # Data persistence
+from order import SalesOrder # PDF generation class
 
-from order import SalesOrder
+# --- ENTRY POINT & UI ---
 
-# --- Data Constants and Definitions ---
-HYPOTHECATION_FEE_DEFAULT = 2000 
-HYPOTHECATION_FEE_BANK_QUOTATION = 500 
-
-# Global variable to hold the opened spreadsheet client instance
-GSPREAD_CLIENT = None
-INCENTIVE_RULES = {}
-SPREADSHEET_TITLE = "Sales Records DB" # Default title, used if not in secrets
-
-# --- Core Data Loading Function (CACHED and Optimized) ---
-@st.cache_data(ttl=3600) # Cache data for 1 hour (3600 seconds)
-def load_and_cache_all_data():
-    """
-    Opens the Google Sheet once and fetches data from all required worksheets.
-    Returns a dictionary of DataFrames.
-    """
-    global GSPREAD_CLIENT
-    
-    if GSPREAD_CLIENT is None:
-        try:
-            # Authentication block
-            GSPREAD_CLIENT = gspread.service_account_from_dict(st.secrets["google_service_account"])
-        except Exception as e:
-            st.error(f"Authentication Error: Could not connect to Google Sheets. Check 'secrets.toml'. Error: {e}")
-            return None
-
-    try:
-        spreadsheet_title = st.secrets.get("spreadsheet_title", SPREADSHEET_TITLE)
-        # --- OPTIMIZATION: Open the entire workbook ONCE ---
-        sh = GSPREAD_CLIENT.open(spreadsheet_title['spreadsheet_title']) 
-        
-        # List of worksheets to load
-        worksheet_names = ["sales_staff", "finance_executives", "finance_companies", "price_list", "colors"]
-        data_frames = {}
-
-        for name in worksheet_names:
-            try:
-                worksheet = sh.worksheet(name)
-                # Manually create DataFrame using all values for robustness (first row is header)
-                data = worksheet.get_all_values() 
-                if data:
-                    data_frames[name] = pd.DataFrame(data[1:], columns=data[0])
-                else:
-                    data_frames[name] = pd.DataFrame() 
-            except gspread.WorksheetNotFound:
-                st.error(f"Worksheet '{name}' not found. Please check spelling in Google Sheet.")
-                return None
-        
-        return data_frames
-        
-    except Exception as e:
-        st.error(f"Error accessing Google Sheet '{spreadsheet_title}'. Error: {e}")
-        return None
-
-# --- Core Data Initialization Function (Processes Cached DataFrames) ---
-def initialize_all_data():
-    """Processes the cached DataFrames into the variables used by the UI."""
-    global INCENTIVE_RULES
-
-    all_dfs = load_and_cache_all_data()
-    if all_dfs is None:
-        return [], {}
-
-    # --- 1. Process Lists (Staff, Executives, Financiers) ---
-    staff_df = all_dfs.get("sales_staff")
-    exec_df = all_dfs.get("finance_executives")
-    financier_df = all_dfs.get("finance_companies")
-    
-    # Staff List
-    initial_staff = staff_df['executive_name'].dropna().astype(str).tolist() if staff_df is not None and 'executive_name' in staff_df.columns else []
-    # Executive List
-    initial_executives = exec_df['finance_executives'].dropna().astype(str).tolist() if exec_df is not None and 'finance_executives' in exec_df.columns else []
-    
-    # Financiers and Incentives
-    if financier_df is not None and 'finance_company' in financier_df.columns:
-        initial_financiers = financier_df['finance_company'].dropna().astype(str).tolist()
-        INCENTIVE_RULES = {}
-        for index, row in financier_df.dropna(subset=['incentive_type', 'incentive_value']).iterrows():
-            
-            # CRITICAL CLEANING STEP: Remove commas from incentive_value string
-            raw_value = str(row['incentive_value']).replace(',', '').strip()
-            
-            # Handle potential empty string after cleaning
-            if raw_value:
-                INCENTIVE_RULES[row['finance_company']] = {
-                    'type': row['incentive_type'],
-                    'value': float(raw_value)
-                }
-    else:
-        initial_financiers = []
-        INCENTIVE_RULES = {}
-        
-    # Store in Session State
-    if 'sales_staff' not in st.session_state:
-        st.session_state['sales_staff'] = initial_staff
-    if 'financiers' not in st.session_state:
-        st.session_state['financiers'] = initial_financiers
-    if 'executives' not in st.session_state:
-        st.session_state['executives'] = initial_executives
-        
-    # --- 2. Process Vehicle Pricing Data ---
-    vehicle_df = all_dfs.get("price_list")
-    vehicles = []
-    if vehicle_df is not None and 'ORP' in vehicle_df.columns and 'FINAL PRICE' in vehicle_df.columns:
-        # Columns were cleaned in the cache function, now convert to numeric
-        vehicle_df['tax'] = pd.to_numeric(vehicle_df['FINAL PRICE'], errors='coerce') - pd.to_numeric(vehicle_df['ORP'], errors='coerce')
-        vehicle_df.rename(columns={
-            'MODEL': 'model', 'VARIANT': 'color', 'ORP': 'orp', 'FINAL PRICE': 'total_price'
-        }, inplace=True)
-        for col in ['orp', 'tax', 'total_price']:
-            vehicle_df[col] = pd.to_numeric(vehicle_df[col], errors='coerce')
-        vehicles = vehicle_df.dropna(subset=['orp', 'total_price']).to_dict('records')
-    else:
-        vehicles = []
-        
-    # --- 3. Process Color Data ---
-    color_df = all_dfs.get("colors")
-    color_map = {}
-    if color_df is not None and 'MODEL' in color_df.columns and 'Color_List' in color_df.columns:
-        color_map = {
-            row['MODEL']: [c.strip() for c in str(row['Color_List']).split(',')]
-            for index, row in color_df.iterrows()
-        }
-    
-    return vehicles, color_map
-
-# --- DC Number Generation ---
-def get_next_dc_number():
-    """Generates the next sequential DC number by reading the last one saved."""
-    try:
-        # Use a non-cached load for this specific function to ensure current value
-        global GSPREAD_CLIENT
-        if GSPREAD_CLIENT is None:
-            GSPREAD_CLIENT = gspread.service_account_from_dict(st.secrets["google_service_account"])
-            
-        spreadsheet_title = st.secrets.get("spreadsheet_title", SPREADSHEET_TITLE)
-        sh = GSPREAD_CLIENT.open(spreadsheet_title['spreadsheet_title'])
-        
-        worksheet = sh.worksheet("sales_records")
-        
-        # Get all values from the 'DC_Number' column (assuming it's the 2nd column)
-        dc_column = worksheet.col_values(2) 
-        current_numbers = []
-        
-        if len(dc_column) > 1:
-            dc_numbers = dc_column[1:] 
-            for dc_str in dc_numbers:
-                if dc_str: # Check that the string is not empty
-                    try:
-                        # CRITICAL FIX: Since the stored value is expected to be a 5-digit number, 
-                        # we try to convert the whole string to an integer.
-                        current_numbers.append(int(dc_str.strip()))
-                    except ValueError:
-                        # Ignore badly formatted entries
-                        pass
-
-            if current_numbers:
-                next_number = max(current_numbers) + 1
-            else:
-                next_number = 1
-        else:
-            next_number = 1
-        
-        return f"{next_number:05d}"
-        
-    except Exception as e:
-        st.error(f"Could not generate sequential DC number. Using default. Error: {e}")
-        return f"DC-ERROR-{pd.Timestamp('now').strftime('%H%M')}"
-
-
-# --- UI Application ---
 def sales_app_ui():
     
-    vehicles, color_map = initialize_all_data() 
+    # Load all data and global rules (cached)
+     
+    spreadsheet_title = st.secrets.get("spreadsheet_title") # Read once for persistence functions
+    vehicles, color_map, incentive_rules = initialize_app_data(spreadsheet_title['spreadsheet_title'])
 
-    st.title("Vehicle Sales System")
+    st.title("🚗 Vehicle Sales System")
     
     if not vehicles:
         st.error("Application setup failed. Data could not be loaded from Google Sheets.")
         return
 
-    # --- 1. Customer Details ---
-    st.header("1. Customer Details")
-    col_name, col_phone = st.columns(2)
-    with col_name:
-        name = st.text_input("Customer Name:")
-    with col_phone:
-        phone = st.text_input("Phone Number:")
-    place = st.text_input("Place/City:")
-
-    # --- 2. Staff & Vehicle Selection ---
-    st.header("2. Staff & Vehicle Selection")
-    col_staff, col_model = st.columns(2)
-    with col_staff:
-        sales_staff = st.selectbox("Sales Staff:", st.session_state['sales_staff']) 
-
-    # 2.1 Model Selection
-    all_models = sorted(list(set([v['model'].strip() for v in vehicles])))
-    with col_model:
-        selected_model = st.selectbox("Select Vehicle Model:", all_models)
-
-    # Filter by Model for Variant/Trim
-    available_variants = [v for v in vehicles if v['model'].strip() == selected_model]
-    variant_options = [v['color'] for v in available_variants]
-    selected_variant = st.selectbox("Select Variant/Trim Level:", variant_options)
-
-    # 2.3 Paint Color Selection
-    model_colors = color_map.get(selected_model, ["No Colors Available"])
-    selected_paint_color = st.selectbox("Select Paint Color:", model_colors)
-
-    # Find the Final Selected Vehicle Data (Price/Tax data is based on Model & Variant)
-    selected_vehicle = next(
-        (v for v in available_variants if v['color'] == selected_variant), 
-        None
-    )
-    if selected_vehicle is None:
-        st.error("Could not find price data for the selected combination.")
-        return
-    
-    listed_price = selected_vehicle['total_price']
-    st.info(f"Selected: **{selected_model} {selected_variant}** in **{selected_paint_color}**")
-    st.info(f"Total Price: **{listed_price:,.2f}**")
-
-    # --- 3. Negotiated Final Cost & Discount ---
-    st.header("3. Negotiated Final Cost")
-    
-    final_cost_by_staff = st.number_input(
-        "Enter Final Vehicle Cost (after discount):", 
-        min_value=0.0, 
-        value=float(listed_price),
-        step=100.0,
-        format="%.2f"
-    )
-    
-    discount_amount = listed_price - final_cost_by_staff
-    
-    if discount_amount > 0:
-        st.success(f"Discount Given: **{discount_amount:,.2f}**")
-    elif discount_amount < 0:
-        st.warning(f"Markup Applied: {abs(discount_amount):,.2f}")
-    else:
-        st.markdown("No Discount applied.")
-
-
-    # --- 4. Payment Details (Finance Management) ---
-    st.header("4. Payment Details")
-    sale_type = st.radio("Sale Type:", ["Cash", "Finance"])
-    
+    # Initialize all financial variables needed later in the form
     financier_name = "N/A (Cash Sale)"
     executive_name = "N/A (Cash Sale)" 
     dd_amount = 0.0
     down_payment = 0.0
-    
     hp_fee_to_charge = 0.0
     incentive_earned = 0.0
     banker_name = "" 
-
-    if sale_type == "Finance":
+    
+    # --- 1. CUSTOMER & STAFF CONTAINER ---
+    with st.container(border=True):
+        st.header("1. Customer & Staff Details")
+        col_name, col_phone = st.columns(2)
+        with col_name:
+            name = st.text_input("Customer Name:")
+        with col_phone:
+            phone = st.text_input("Phone Number:")
         
-        # --- Financier Company Selection and Management ---
-        st.subheader("Financier Company Details")
+        place = st.text_input("Place/City:")
+
+    # --- 2. VEHICLE SELECTION & CONFIGURATION CONTAINER ---
+    with st.container(border=True):
+        st.header("2. Vehicle & Pricing")
+        sales_staff = st.selectbox("Sales Staff:", st.session_state['sales_staff']) 
+        # 2.1 Model Selection
+        all_models = sorted(list(set([v['model'].strip() for v in vehicles])))
+        col_model, col_variant = st.columns(2)
+        with col_model:
+            selected_model = st.selectbox("Vehicle Model:", all_models)
+
+        # Filter by Model for Variant/Trim
+        available_variants = [v for v in vehicles if v['model'].strip() == selected_model]
+        variant_options = [v['color'] for v in available_variants]
+        with col_variant:
+            selected_variant = st.selectbox("Variant/Trim Level:", variant_options)
+
+        # 2.3 Paint Color Selection
+        model_colors = color_map.get(selected_model, ["No Colors Available"])
+        selected_paint_color = st.selectbox("Paint Color:", model_colors)
         
-        out_finance_flag = st.checkbox("Check here if this is **Out Finance** (Financing done externally).")
+        # Find the Final Selected Vehicle Data (Price/Tax data is based on Model & Variant)
+        selected_vehicle = next(
+            (v for v in available_variants if v['color'] == selected_variant), 
+            None
+        )
         
-        col_comp_select, col_comp_new = st.columns([2, 1])
-
-        with col_comp_select:
-            financier_name = st.selectbox(
-                "Select Existing Financier Company:", 
-                st.session_state['financiers']
-            )
-
-        with col_comp_new:
-            new_financier = st.text_input("Or Add New Company:")
-            if st.button("Add Company"):
-                if new_financier and new_financier not in st.session_state['financiers']:
-                    st.session_state['financiers'].append(new_financier)
-                    st.success(f"'{new_financier}' added! Please select it from the dropdown.")
-                    st.rerun() 
-                elif new_financier:
-                    st.info("Financier already in the list.")
-
-        # 4.3 Conditional Banker Name Input
-        if financier_name == 'Bank':
+        if selected_vehicle is None:
+            st.error("Could not find price data for the selected combination.")
+            listed_price = 0.0
+        else:
+            listed_price = selected_vehicle['total_price']
             st.markdown("---")
-            st.subheader("Bank Quotation Details")
-            banker_name = st.text_input("Enter Banker's Name (for tracking quote):", key="banker_name_input")
-            financier_name = banker_name
-            st.markdown("---")
+            st.info(f"Listed Price: **₹{listed_price:,.2f}**")
 
-
-        # --- Finance Executive Selection and Management ---
-        st.subheader("Finance Executive Details")
-        col_exec_select, col_exec_new = st.columns([2, 1])
-
-        with col_exec_select:
-            executive_name = st.selectbox(
-                "Select Executive Name:",
-                st.session_state['executives']
+        # --- 2.4 Negotiation ---
+        col_final_cost, col_discount_info = st.columns(2)
+        with col_final_cost:
+            final_cost_by_staff = st.number_input(
+                "Final Vehicle Cost (after discount):", 
+                min_value=0.0, 
+                value=float(listed_price),
+                step=100.0,
+                format="%.2f"
             )
-
-        with col_exec_new:
-            new_executive = st.text_input("Or Add New Executive:")
-            if st.button("Add Executive"):
-                if new_executive and new_executive not in st.session_state['executives']:
-                    st.session_state['executives'].append(new_executive)
-                    st.success(f"'{new_executive}' added! Please select it from the dropdown.")
-                    st.rerun()
-                elif new_executive:
-                    st.info("Executive already in the list.")
-
-
-        # --- Down Payment and DD Input ---
-        st.subheader("Payment Amounts")
-        col_dd, col_dp_calc = st.columns(2)
-
-        with col_dd:
-            dd_amount = st.number_input("DD / Booking Amount:", min_value=0.0, step=100.0, format="%.2f", key="dd_input")
         
-        
-        # --- CRITICAL: Determine HP Fee and Incentive ---
-        if out_finance_flag:
-            # SCENARIO 2: Out Finance ($2000 HP Fee, No incentive)
-            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT
-            incentive_earned = 0.0 
+        discount_amount = listed_price - final_cost_by_staff
+        with col_discount_info:
+            if discount_amount > 0:
+                st.success(f"Discount: **₹{discount_amount:,.2f}**")
+            elif discount_amount < 0:
+                st.warning(f"Markup: ₹{abs(discount_amount):,.2f}")
+            else:
+                st.markdown("Discount: **₹0.00**")
 
-        elif financier_name == 'Bank':
-            # SCENARIO 1: Bank Quotation ($500 HP Fee, No incentive)
-            hp_fee_to_charge = HYPOTHECATION_FEE_BANK_QUOTATION
+    # --- 3. PAYMENT & FINANCE CONTAINER ---
+    with st.container(border=True):
+        st.header("3. Payment & Financing")
+        
+        col_sale_type, col_filler = st.columns([1, 2])
+        with col_sale_type:
+            sale_type = st.radio("Sale Type:", ["Cash", "Finance"])
+
+        if sale_type == "Finance":
+            
+            # --- Finance Configuration Expander ---
+            with st.expander("Financing Source & Executive", expanded=True):
+                
+                # 4.1 Flags and Company Selection
+                out_finance_flag = st.checkbox("Check if **Out Finance** (External):")
+                
+                col_comp_select, col_comp_add = st.columns([2, 1])
+
+                with col_comp_select:
+                    financier_name = st.selectbox(
+                        "Financier Company:", 
+                        st.session_state['financiers']
+                    )
+
+                # Add new company button/input (compact)
+                with col_comp_add:
+                    st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True) # Spacer
+                    new_financier = st.text_input("New Co.", label_visibility="collapsed", key="new_financier_input")
+                    if st.button("Add Co.", key="add_finance_btn", use_container_width=True):
+                        if new_financier and new_financier not in st.session_state['financiers']:
+                            st.session_state['financiers'].append(new_financier)
+                            st.rerun() 
+                        elif new_financier:
+                            st.info("Already in list.")
+
+                # Conditional Banker Name Input
+                if financier_name == 'Bank':
+                    banker_name = st.text_input("Banker's Name (for tracking quote):", key="banker_name_input")
+                
+                # Executive Selection (Compact)
+                col_exec_select, col_exec_add = st.columns([2, 1])
+                with col_exec_select:
+                    executive_name = st.selectbox("Executive Name:", st.session_state['executives'])
+
+                with col_exec_add:
+                    st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True) # Spacer
+                    new_executive = st.text_input("New Exec.", label_visibility="collapsed", key="new_exec_input")
+                    if st.button("Add Exec", key="add_exec_btn", use_container_width=True):
+                        if new_executive and new_executive not in st.session_state['executives']:
+                            st.session_state['executives'].append(new_executive)
+                            st.rerun()
+                        elif new_executive:
+                            st.info("Already in list.")
+                
+                # --- Payment Input ---
+                st.subheader("Initial Payment & Calculation")
+                dd_amount = st.number_input("DD / Booking Amount:", min_value=0.0, step=100.0, format="%.2f", key="dd_input")
+            
+                
+                # --- CRITICAL: Determine HP Fee and Incentive (Must be calculated inside this block) ---
+                hp_fee_to_charge, incentive_earned = calculate_finance_fees(
+                    financier_name, dd_amount, out_finance_flag, incentive_rules
+                )
+                
+                # 1. CALCULATE TOTAL CUSTOMER OBLIGATION
+                total_customer_obligation = final_cost_by_staff + hp_fee_to_charge + incentive_earned
+                
+                # 2. CALCULATE REQUIRED DOWN PAYMENT
+                remaining_upfront_needed = total_customer_obligation - dd_amount
+                calculated_dp = max(0.0, remaining_upfront_needed)
+
+                # Final Assignment
+                down_payment = calculated_dp
+                total_paid = dd_amount + down_payment
+                financed_amount = total_customer_obligation - total_paid
+                if financed_amount < 0:
+                    financed_amount = 0.0
+
+            # --- Final Summary of Charges (Outside Expander, prominent) ---
+            st.markdown("### Final Figures")
+            
+            col_hp, col_incentive, col_financed = st.columns(3)
+            col_hp.metric("HP Fee Charged", f"₹{hp_fee_to_charge:,.2f}")
+            col_incentive.metric("Incentive Collected", f"₹{incentive_earned:,.2f}")
+            col_financed.metric("TOTAL FINANCED", f"₹{financed_amount:,.2f}")
+            
+            st.markdown(f"**Total Customer Obligation (Vehicle + Fees):** **₹{total_customer_obligation:,.2f}**")
+            st.success(f"**Required Down Payment:** **₹{calculated_dp:,.2f}**")
+            
+        
+        # --- CASH SALE FINAL DISPLAY ---
+        else:
+            total_customer_obligation = final_cost_by_staff
+            st.success(f"Total Cash Amount Due: **₹{total_customer_obligation:,.2f}**")
+            down_payment = 0.0 # Set explicit zero for logging consistency
+            hp_fee_to_charge = 0.0
             incentive_earned = 0.0
 
-        else:
-            # SCENARIO 3: Other Financiers (Full HP + Incentive)
-            hp_fee_to_charge = HYPOTHECATION_FEE_DEFAULT
-            
-            if financier_name in INCENTIVE_RULES:
-                rule = INCENTIVE_RULES[financier_name]
-                if rule['type'] == 'percentage_dd':
-                    incentive_earned = dd_amount * rule['value']
-                elif rule['type'] == 'fixed_file':
-                    incentive_earned = rule['value']
-        
-        
-        # 1. CALCULATE TOTAL CUSTOMER OBLIGATION
-        total_customer_obligation = final_cost_by_staff + hp_fee_to_charge + incentive_earned
-        
-        # 2. CALCULATE REQUIRED DOWN PAYMENT
-        remaining_upfront_needed = total_customer_obligation - dd_amount
-        
-        with col_dp_calc:
-            if remaining_upfront_needed < 0:
-                calculated_dp = 0.0
-                st.info(f"Required Down Payment: 0.00")
-                st.warning(f"DD amount covers all costs! Excess collected: {abs(remaining_upfront_needed):,.2f}")
-            else:
-                calculated_dp = remaining_upfront_needed
-                st.info(f"Required Down Payment: **{calculated_dp:,.2f}**")
-        
-        # --- Final Assignment ---
-        down_payment = calculated_dp
-        total_paid = dd_amount + down_payment
 
-        # 3. CALCULATE FINAL FINANCED AMOUNT
-        financed_amount = total_customer_obligation - total_paid
-        if financed_amount < 0:
-            financed_amount = 0.0
-
-        # Display fees and final financed amount
-        st.markdown(f"**Hypothecation Fee Charged:** **{hp_fee_to_charge:,.2f}**")
-        st.markdown(f"**Financier Incentive Collected:** **{incentive_earned:,.2f}**")
-        st.markdown(f"**Total Customer Obligation:** **{total_customer_obligation:,.2f}**")
-        
-    
-    # --- 5. Generate PDF Button ---
+    # --- 5. Generate PDF Button (Action Block) ---
     st.markdown("---")
     if st.button("Generate and Download DC PDF", type="primary"):
+        # ... (Validation checks remain the same) ...
         if not name or not phone:
             st.error("Please enter Customer Name and Phone Number.")
             return
-        
-        if financier_name == 'Bank' and not banker_name.strip():
+        if sale_type == 'Finance' and financier_name == 'Bank' and not banker_name.strip():
             st.error("Please enter the Banker's Name for the 'Bank' quotation.")
             return
 
         # Generate DC Number
-        dc_number = get_next_dc_number()
+        dc_number = get_next_dc_number(GSPREAD_CLIENT, st.secrets.get("spreadsheet_title"))
+        
+        # Get the correct financier name for the record 
+        final_financier_name = banker_name if financier_name == 'Bank' and banker_name else financier_name
 
         order = SalesOrder(
             name, place, phone, selected_vehicle, final_cost_by_staff, 
-            sales_staff, financier_name, executive_name, selected_paint_color,
+            sales_staff, final_financier_name, executive_name, selected_paint_color,
             hp_fee_to_charge,     
             incentive_earned,
             banker_name,
@@ -406,20 +221,14 @@ def sales_app_ui():
         if sale_type == "Finance":
             order.set_finance_details(dd_amount, down_payment)
         
-        # --- Save Data to Google Sheets (Sales Records) ---
-        record_data = order.get_data_for_export()
+        # --- Save Data to Google Sheets ---
         try:
-            gc = gspread.service_account_from_dict(st.secrets["google_service_account"])
-            spreadsheet_title = st.secrets.get("spreadsheet_title", SPREADSHEET_TITLE)
-        # --- OPTIMIZATION: Open the entire workbook ONCE ---
-            sh = gc.open(spreadsheet_title['spreadsheet_title'])
-            worksheet = sh.worksheet("sales_records")
-            worksheet.append_row(list(record_data.values()))
+            save_record_to_sheet(order.get_data_for_export(), st.secrets.get("spreadsheet_title"))
         except Exception as e:
             st.error(f"Error saving data to Google Sheets. Error: {e}")
             
         # --- PDF Generation and Download ---
-        pdf_filename = f"DC_{name.replace(' ', '_')}_{order.vehicle['model'].replace(' ', '_')}.pdf"
+        pdf_filename = f"DC_{dc_number}_{name.replace(' ', '_')}.pdf"
         
         try:
             order.generate_pdf_challan(pdf_filename)
@@ -432,7 +241,7 @@ def sales_app_ui():
                     mime="application/pdf"
                 )
             
-            st.success(f"Delivery Challan generated for {name}! Click the button to download.")
+            st.success(f"DC generated and saved successfully!")
             st.balloons()
             
         except Exception as e:
