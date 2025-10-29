@@ -1,3 +1,7 @@
 price_list.xlsx
 __pycache__/order.cpython-313.pyc
 *.pdf
+.vscode/launch.json
+__pycache__/config.cpython-313.pyc
+__pycache__/finance_helper.cpython-313.pyc
+__pycache__/data_manager.cpython-313.pyc
