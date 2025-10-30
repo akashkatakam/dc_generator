@@ -79,26 +79,47 @@ def get_next_dc_number(gspread_client: gspread.Client, spreadsheet_title: str) -
         return f"DC-ERROR-{pd.Timestamp('now').strftime('%H%M')}"
     
 def get_max_accessory_invoice_number(df_sales_records: pd.DataFrame, firm_id: int) -> int:
-    """Finds the maximum sequential invoice number used for a given firm ID from Sales_Records."""
+    """
+    Finds the maximum sequential invoice number used for a given firm ID from Sales_Records 
+    by extracting the numeric part (e.g., 1001 from KM-1001).
+    """
     
     if firm_id == 1:
         inv_col = 'KM ACC'
-        start_seq = 1000 # Base for KM series
+        start_seq = 1000 
+        prefix = 'KM'
     elif firm_id == 2:
         inv_col = 'VA ACC'
-        start_seq = 1000 # Base for VA series
+        start_seq = 1000 
+        prefix = 'VA'
     else:
         return 0
 
     if inv_col not in df_sales_records.columns:
         return start_seq
 
-    # Ensure column is numeric and find max
-    df_sales_records[inv_col] = pd.to_numeric(df_sales_records[inv_col], errors='coerce')
-    max_inv = df_sales_records[inv_col].max()
+    # 1. Ensure the column is treated as string and filter for the prefix
+    inv_series = df_sales_records[inv_col].astype(str).str.strip()
     
-    # If no valid records found, return the base start sequence + 1
-    return int(max_inv) if not pd.isna(max_inv) and max_inv >= start_seq else start_seq
+    # Filter only entries that start with the correct prefix (e.g., 'KM-')
+    filtered_inv = inv_series[inv_series.str.startswith(f'{prefix}-', na=False)]
+    
+    if filtered_inv.empty:
+        return start_seq
+
+    # 2. Extract the numeric part (the number after the hyphen)
+    #    Example: 'KM-1001' -> '1001'
+    numeric_parts = filtered_inv.str.split('-').str[-1]
+    
+    # 3. Convert the extracted parts to numeric, coercing errors (for invalid strings)
+    max_numeric = pd.to_numeric(numeric_parts, errors='coerce').max()
+    
+    # 4. Handle NaN result if conversion failed for all entries
+    if pd.isna(max_numeric):
+        return start_seq
+
+    # Return the maximum sequential number found. The calling function will increment this.
+    return max(int(max_numeric), start_seq)
 
 def generate_accessory_invoice_number(df_sales_records: pd.DataFrame, firm_id: int) -> Tuple[str, int]:
     """
