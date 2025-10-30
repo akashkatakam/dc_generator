@@ -278,7 +278,7 @@ class SalesOrder:
         c.drawString(x_col_split, summary_y_cursor, f"Sale Type: {self.sale_type}")
         summary_y_cursor -= row_height
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(x_col_split, summary_y_cursor, f"Finance name: Rs.{self.financier_name:,.2f}")
+        c.drawString(x_col_split, summary_y_cursor, f"Finance name: Rs.{self.financier_name}")
         summary_y_cursor -= row_height
 
 
