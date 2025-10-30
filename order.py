@@ -248,13 +248,6 @@ class SalesOrder:
             c.drawString(x_margin, y_cursor, "Down Payment Amount Paid:")
             c.drawString(x_price_col, y_cursor, f"Rs.{self.down_payment:,.2f}")
         
-        if self.incentive_earned > 0 and self.financier_name != 'Bank':
-            y_internal = 0.5 * inch
-            c.setFont("Helvetica-Bold", 10)
-            c.setFillColor(green)
-            c.drawString(x_margin, y_internal, f"*** INTERNAL NOTE: Finance Incentive Earned: Rs.{self.incentive_earned:,.2f} ***")
-            c.setFillColor(black)
-            
         else: # Cash Sale
             c.setFont("Helvetica-Bold", 12)
             c.drawString(x_margin, y_cursor, f"Total Cash Payment Received:")

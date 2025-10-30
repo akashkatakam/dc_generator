@@ -86,7 +86,7 @@ def get_max_accessory_invoice_number(df_sales_records: pd.DataFrame, firm_id: in
         start_seq = 1000 # Base for KM series
     elif firm_id == 2:
         inv_col = 'VA ACC'
-        start_seq = 2000 # Base for VA series
+        start_seq = 1000 # Base for VA series
     else:
         return 0
 
