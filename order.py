@@ -101,7 +101,6 @@ class SalesOrder:
             'Charge_Incentive': self.incentive_earned,
             'Payment_DD': self.dd_amount,
             'Payment_DownPayment': self.down_payment,
-            'Amount_Financed': self.remaining_finance_amount,
             
             # --- Accessory Invoice Numbers (For Auditing) ---
             'Acc_Inv_1_No': bill_1_inv_seq,
