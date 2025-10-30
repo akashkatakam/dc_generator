@@ -271,9 +271,11 @@ class SalesOrder:
 
         # Left Column (Vehicle Summary)
         c.setFont("Helvetica", 10)
+        c.drawString(x_margin, y_cursor, f"Customer Name: {self.customer_name}")
+        y_cursor -= row_height
         c.drawString(x_margin, y_cursor, f"DC No.: {self.dc_number}")
         y_cursor -= row_height
-        c.drawString(x_margin, y_cursor, f"Model/Color: {self.vehicle.get('model')} ({self.vehicle_color_name})")
+        c.drawString(x_margin, y_cursor, f"Model/Color: {self.vehicle.get('model')} {self.vehicle.get('color')} ({self.vehicle_color_name})")
         y_cursor -= row_height
         c.drawString(x_margin, y_cursor, f"Final Price: Rs.{self.final_cost:,.2f}")
         
@@ -283,7 +285,7 @@ class SalesOrder:
         summary_y_cursor -= row_height
         c.drawString(x_col_split, summary_y_cursor, f"Down Payment: Rs.{self.down_payment:,.2f}")
         summary_y_cursor -= row_height
-        c.drawString(x_col_split, summary_y_cursor, f"Amount Financed: Rs.{self.remaining_finance_amount:,.2f}")
+
 
 
         # --- Footer Signatures ---
