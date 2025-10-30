@@ -71,7 +71,7 @@ class SalesOrder:
         now_ist = datetime.now(IST_TIMEZONE)
         
         # 2. Format the IST time for the log
-        ist_timestamp_str = now_ist.strftime('%Y-%m-%d %H:%M:%S IST')
+        ist_timestamp_str = now_ist.strftime('%Y-%m-%d')
         data = {
             # --- Transaction Metadata ---
             'Timestamp': ist_timestamp_str,
