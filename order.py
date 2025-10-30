@@ -258,24 +258,27 @@ class SalesOrder:
         c.line(x_margin, y_cursor, width_l - x_margin, y_cursor) 
         y_cursor -= 0.2 * inch
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(x_margin, y_cursor, "TRANSACTION SUMMARY (CUSTOMER COPY)")
+        c.drawString(x_margin, y_cursor, "Delivery challan (CUSTOMER COPY)")
         y_cursor -= 0.2 * inch
 
         # Left Column (Vehicle Summary)
-        c.setFont("Helvetica", 10)
+        c.setFont("Helvetica", 12)
         c.drawString(x_margin, y_cursor, f"Customer Name: {self.customer_name}")
         y_cursor -= row_height
+        c.setFont("Helvetica", 10)
         c.drawString(x_margin, y_cursor, f"DC No.: {self.dc_number}")
         y_cursor -= row_height
+        c.setFont("Helvetica-Bold", 10)
         c.drawString(x_margin, y_cursor, f"Model/Color: {self.vehicle.get('model')} {self.vehicle.get('color')} ({self.vehicle_color_name})")
         y_cursor -= row_height
-        c.drawString(x_margin, y_cursor, f"Final Price: Rs.{self.final_cost:,.2f}")
         
         # Right Column (Payment Summary)
         summary_y_cursor = 3.6 * inch 
+        c.setFont("Helvetica", 10)
         c.drawString(x_col_split, summary_y_cursor, f"Sale Type: {self.sale_type}")
         summary_y_cursor -= row_height
-        c.drawString(x_col_split, summary_y_cursor, f"Down Payment: Rs.{self.down_payment:,.2f}")
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x_col_split, summary_y_cursor, f"Finance name: Rs.{self.financier_name:,.2f}")
         summary_y_cursor -= row_height
 
 
