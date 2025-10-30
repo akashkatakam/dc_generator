@@ -7,10 +7,12 @@ from reportlab.lib.colors import red, black, green
 import pandas as pd
 from typing import Dict, Any, List, Tuple
 from datetime import datetime
+import pytz
 
 # --- CONFIGURATION (Assumed to be available via import or scope) ---
 GST_RATE_DISPLAY = 18 
 LINE_HEIGHT = 13 # Standard line height for accessory bill PDF
+IST_TIMEZONE = pytz.timezone('Asia/Kolkata')
 
 # --- SalesOrder Class ---
 
@@ -66,9 +68,13 @@ class SalesOrder:
 
     def get_data_for_export(self, bill_1_inv_seq: int, bill_2_inv_seq: int) -> Dict[str, Any]:
         """Returns a flat dictionary of all transaction data for storage."""
+        now_ist = datetime.now(IST_TIMEZONE)
+        
+        # 2. Format the IST time for the log
+        ist_timestamp_str = now_ist.strftime('%Y-%m-%d %H:%M:%S IST')
         data = {
             # --- Transaction Metadata ---
-            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'Timestamp': ist_timestamp_str,
             'DC_Number': self.dc_number,
             'Sales_Staff': self.sales_staff,
             'Financier_Company': self.financier_name,
@@ -107,7 +113,7 @@ class SalesOrder:
         """Generates a single PDF file containing the DC Order (Page 1) and Accessory Bills (Page 2+)."""
         
         # Use letter size for the primary DC page, but A4 for general use
-        current_date = datetime.now().strftime("%d-%m-%Y")
+        current_date = datetime.now(IST_TIMEZONE).strftime("%d-%m-%Y")
         c = canvas.Canvas(filename, pagesize=letter) 
         width_l, height_l = letter
         A4_W, A4_H = A4
