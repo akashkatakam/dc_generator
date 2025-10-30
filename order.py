@@ -193,7 +193,7 @@ class SalesOrder:
         
         # Final Negotiated Cost
         c.line(x_margin, y_cursor + 0.05 * inch, width_l - x_margin, y_cursor + 0.05 * inch) 
-        y_cursor -= 0.1 * inch
+        y_cursor -= 0.3 * inch
         c.setFont("Helvetica-Bold", 12)
         c.drawString(x_margin, y_cursor, "FINAL VEHICLE COST:")
         c.drawString(x_price_col, y_cursor, f"Rs.{self.final_cost:,.2f}")
@@ -238,16 +238,16 @@ class SalesOrder:
             c.drawString(x_price_col, y_cursor, f"Rs.{self.dd_amount:,.2f}")
             y_cursor -= row_height
 
-            c.drawString(x_margin, y_cursor, f"Down Payment Amount Paid:")
-            c.drawString(x_price_col, y_cursor, f"Rs.{self.down_payment:,.2f}")
-            y_cursor -= 0.3 * inch
-            
-            c.line(x_price_col, y_cursor + 0.05 * inch, x_price_col + 1.5 * inch, y_cursor + 0.05 * inch)
-            y_cursor -= 0.1 * inch
-            
             c.setFont("Helvetica-Bold", 12)
-            c.drawString(x_margin, y_cursor, "FINAL AMOUNT TO BE FINANCED:")
-            c.drawString(x_price_col, y_cursor, f"Rs.{self.remaining_finance_amount:,.2f}")
+            c.drawString(x_margin, y_cursor, "Down Payment Amount Paid:")
+            c.drawString(x_price_col, y_cursor, f"Rs.{self.down_payment:,.2f}")
+        
+        if self.incentive_earned > 0 and self.financier_name != 'Bank':
+            y_internal = 0.5 * inch
+            c.setFont("Helvetica-Bold", 10)
+            c.setFillColor(green)
+            c.drawString(x_margin, y_internal, f"*** INTERNAL NOTE: Finance Incentive Earned: Rs.{self.incentive_earned:,.2f} ***")
+            c.setFillColor(black)
             
         else: # Cash Sale
             c.setFont("Helvetica-Bold", 12)
@@ -288,13 +288,6 @@ class SalesOrder:
         c.line(width_l - x_margin - 2 * inch, y_cursor, width_l - x_margin, y_cursor)
         c.drawCentredString(width_l - x_margin - inch, y_cursor - 0.2 * inch, "Staff Signature")
 
-        # Internal Note 
-        if self.incentive_earned > 0 and self.financier_name != 'Bank':
-            y_internal = 0.5 * inch
-            c.setFont("Helvetica-Bold", 10)
-            c.setFillColor(green)
-            c.drawString(x_margin, y_internal, f"*** INTERNAL NOTE: Finance Incentive Earned: Rs.{self.incentive_earned:,.2f} ***")
-            c.setFillColor(black)
 
         # =========================================================================
         # PAGE 2 onwards: ACCESSORY BILLS (DUAL COPIES)
@@ -315,10 +308,9 @@ class SalesOrder:
             else:
                 acc_inv_seq = self.bill_2_inv_seq
             
-            prefix = 'KM' if bill['firm_id'] == 1 else 'VA' # Assuming prefixes are known
             
             invoice_data = {
-                'Invoice_No': f"{prefix}-{acc_inv_seq}", 
+                'Invoice_No': f"{acc_inv_seq}", 
                 'Date': current_date,
                 'Customer_Name': self.customer_name,
                 'Customer_Phone': self.phone, 

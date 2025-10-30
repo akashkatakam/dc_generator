@@ -24,8 +24,7 @@ STAFF_LIST, EXECUTIVE_LIST, FINANCIER_LIST = results
 # --- UI Application ---
 def sales_app_ui():
     
-    st.title("🚗 DC Generator / Vehicle Sales System")
-    st.caption("Organized for efficient data entry.")
+    st.title("🚗 Vehicle Sales System")
     
     # Check for fatal data loading error
     if not vehicles:
@@ -121,10 +120,9 @@ def sales_app_ui():
             # --- Finance Configuration Expander ---
             with st.expander("Financing Source & Executive", expanded=True):
                 
-                # 4.1 Flags and Company Selection
                 st.subheader("Financier Source")
                 out_finance_flag = st.checkbox("Check if **Out Finance** (External):")
-                
+
                 col_comp_select, col_comp_new = st.columns([2, 1])
 
                 with col_comp_select:
@@ -134,12 +132,13 @@ def sales_app_ui():
                     )
 
                 with col_comp_new:
-                    new_financier = st.text_input("New Co.")
-                    if st.button("Add Company"):
-                        if new_financier and new_financier not in FINANCIER_LIST:
-                            st.error("Contact administrator to update list.")
-                        elif new_financier:
-                            st.info("Financier already in the list.")
+                    # --- CONDITIONAL INPUT 1: Financier ---
+                    # Only show the text input if a specific 'Other' option is selected
+                    if financier_name == 'Other (Enter Name Below)':
+                        new_financier = st.text_input("Enter Company Name:", key="new_financier_name")
+                        # CRITICAL: Overwrite the financier_name for the order object if a custom name is entered
+                        if new_financier:
+                            financier_name = new_financier
 
                 # 4.3 Conditional Banker Name Input
                 if financier_name == 'Bank':
@@ -147,24 +146,22 @@ def sales_app_ui():
                     banker_name = st.text_input("Banker's Name (for tracking quote):", key="banker_name_input")
                     st.markdown("---")
 
-                # --- Finance Executive Selection and Management ---
                 st.subheader("Finance Executive")
-                executive_name = st.selectbox(
-                    "Executive Name:",
-                    EXECUTIVE_LIST
-                )
-                
-                st.markdown("###### Add New Executive:")
-                col_new_exec_input, col_new_exec_button = st.columns([3, 1])
-                with col_new_exec_input:
-                    new_executive = st.text_input("New Exec.", label_visibility="collapsed")
-                with col_new_exec_button:
-                    if st.button("Add Exec"):
-                        if new_executive and new_executive not in EXECUTIVE_LIST:
-                            st.error("Contact administrator to update list.")
-                        elif new_executive:
-                            st.info("Executive already in the list.")
+                col_fin_ex_select, col_fin_ex_new = st.columns([2, 1])
+                # --- Finance Executive Selection and Management ---
+                with col_fin_ex_select:
+                    executive_name = st.selectbox(
+                        "Executive Name:",
+                        EXECUTIVE_LIST
+                    )
 
+                with col_fin_ex_new:
+                # --- CONDITIONAL INPUT 2: Executive ---
+                    if executive_name == 'Other (Enter Name Below)':
+                        new_executive = st.text_input("Enter Finance Executive Name:", key="new_executive_name_input")
+                        # CRITICAL: Overwrite the executive_name for the order object if a custom name is entered
+                        if new_executive:
+                            executive_name = new_executive
 
                 # --- Payment Input ---
                 st.subheader("Payment Amounts")
@@ -197,10 +194,9 @@ def sales_app_ui():
             # --- Final Summary of Charges (Outside Expander, prominent) ---
             st.markdown("### Final Figures")
             
-            col_hp, col_incentive, col_financed = st.columns(3)
+            col_hp, col_incentive = st.columns(2)
             col_hp.metric("HP Fee Charged", f"₹{hp_fee_to_charge:,.2f}")
             col_incentive.metric("Incentive Collected", f"₹{incentive_earned:,.2f}")
-            col_financed.metric("TOTAL FINANCED", f"₹{financed_amount:,.2f}")
             
             st.markdown(f"**Total Customer Obligation (Vehicle + Fees):** **₹{total_customer_obligation:,.2f}**")
             st.success(f"**Required Down Payment:** **₹{calculated_dp:,.2f}**")
@@ -217,7 +213,7 @@ def sales_app_ui():
 
     # --- 5. Generate PDF Button ---
     st.markdown("---")
-    if st.button("GENERATE DUAL-FIRM BILLS", type="primary"):
+    if st.button("GENERATE DC", type="primary"):
         if not name or not phone:
             st.error("Please enter Customer Name and Phone Number.")
             return

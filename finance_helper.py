@@ -82,10 +82,10 @@ def get_max_accessory_invoice_number(df_sales_records: pd.DataFrame, firm_id: in
     """Finds the maximum sequential invoice number used for a given firm ID from Sales_Records."""
     
     if firm_id == 1:
-        inv_col = 'Acc_Inv_1_No'
+        inv_col = 'KM ACC'
         start_seq = 1000 # Base for KM series
     elif firm_id == 2:
-        inv_col = 'Acc_Inv_2_No'
+        inv_col = 'VA ACC'
         start_seq = 2000 # Base for VA series
     else:
         return 0
